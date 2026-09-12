@@ -48,6 +48,9 @@ version = "0.1.0"
 dependencies = [
  "amx-core",
  "amx-mcp",
+ "amx-parse",
+ "amx-store",
+ "tempfile",
 ]
 
 [[package]]
