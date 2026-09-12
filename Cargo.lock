@@ -88,8 +88,12 @@ name = "amx-store"
 version = "0.1.0"
 dependencies = [
  "amx-core",
+ "percent-encoding",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
+ "unicode-normalization",
 ]
 
 [[package]]
