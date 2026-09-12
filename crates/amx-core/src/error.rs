@@ -88,6 +88,16 @@ pub enum AmxError {
     },
 
     #[error(
+        "account {requested:?} matched none of {available} accounts \
+         (percent-decoded, NFC-normalised); closest: {suggestions:?}"
+    )]
+    AccountFilterUnmatched {
+        requested: String,
+        available: usize,
+        suggestions: Vec<String>,
+    },
+
+    #[error(
         "attachment {name:?} is not on disk: message is a partial download \
          ({on_disk} of {declared} bytes). Run `amxcli fetch-full --rowid {rowid}`"
     )]

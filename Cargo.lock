@@ -101,12 +101,16 @@ dependencies = [
  "amx-store",
  "axum",
  "rmcp",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
+ "tantivy",
+ "tempfile",
  "thiserror",
  "tokio",
  "tower-http",
+ "unicode-normalization",
 ]
 
 [[package]]
