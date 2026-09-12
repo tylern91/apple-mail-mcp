@@ -123,13 +123,14 @@ jobs:
       - name: Compute digest
         id: digest
         run: |
-          sum="$(shasum -a 256 "${{ steps.pkg.outputs.archive }}" | awk '{print $1}')"
+          shasum -a 256 "${{ steps.pkg.outputs.archive }}" > "${{ steps.pkg.outputs.archive }}.sha256"
+          sum="$(awk '{print $1}' "${{ steps.pkg.outputs.archive }}.sha256")"
           printf 'sha256_darwin=%s\n' "$sum" >> "$GITHUB_OUTPUT"
 
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" "${{ steps.pkg.outputs.archive }}" --clobber
+        run: gh release upload "${{ inputs.tag }}" "${{ steps.pkg.outputs.archive }}" "${{ steps.pkg.outputs.archive }}.sha256" --clobber
 
   finalize-notes:
     name: Finalize release notes with asset digests
