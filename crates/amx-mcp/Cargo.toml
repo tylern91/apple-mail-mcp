@@ -2,6 +2,7 @@
 name = "amx-mcp"
 version.workspace = true
 rust-version.workspace = true
+license.workspace = true
 edition = "2024"
 publish = false
 description = "MCP protocol server exposing Apple Mail read/mutate/send tools"
