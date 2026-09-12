@@ -66,12 +66,25 @@ impl MailboxRegistry {
         self.by_normalized_url.get(&normalize(url))
     }
 
+    /// The same percent-decode -> NFC -> casefold pipeline [`Self::resolve`] uses internally —
+    /// exposed so callers that key their own data on mailbox identity (e.g. the index schema's
+    /// `mailbox_key` field) normalize identically rather than reimplementing the pipeline.
+    pub fn normalize_url(url: &str) -> String {
+        normalize(url)
+    }
+
     pub fn len(&self) -> usize {
         self.by_normalized_url.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.by_normalized_url.is_empty()
+    }
+
+    /// Every mailbox the registry holds, in no particular order — used by callers (e.g. task 10's
+    /// sync orchestration) that need to look a mailbox up by `rowid` rather than by URL.
+    pub fn iter(&self) -> impl Iterator<Item = &Mailbox> {
+        self.by_normalized_url.values()
     }
 
     /// Mailboxes whose URL host segment is `account_identifier` — the account UUID that also

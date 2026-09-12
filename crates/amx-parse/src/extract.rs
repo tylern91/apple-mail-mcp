@@ -141,6 +141,29 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Dispatches `bytes` to the extractor matching `(type_, subtype)`, or `None` if this module has
+/// no extractor for that MIME type — the caller treats an unrecognized type the same as an
+/// extraction failure (`AttachmentState::Unextractable`), not a hard error.
+pub fn extract_by_content_type(
+    type_: &str,
+    subtype: Option<&str>,
+    bytes: &[u8],
+) -> Option<Result<String, ExtractError>> {
+    let subtype = subtype.map(str::to_ascii_lowercase);
+    match (type_.to_ascii_lowercase().as_str(), subtype.as_deref()) {
+        ("text", Some("html")) => Some(Ok(html_to_text(&String::from_utf8_lossy(bytes)))),
+        ("application", Some(sub)) if sub.contains("pdf") => Some(pdf_to_text(bytes)),
+        ("application", Some(sub)) if is_office_xml_subtype(sub) => Some(office_xml_to_text(bytes)),
+        _ => None,
+    }
+}
+
+fn is_office_xml_subtype(subtype: &str) -> bool {
+    subtype.contains("wordprocessingml")
+        || subtype.contains("presentationml")
+        || subtype.contains("spreadsheetml")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +281,16 @@ mod tests {
     fn pdf_to_text_rejects_a_non_pdf_blob() {
         let err = pdf_to_text(b"not a pdf file").unwrap_err();
         assert!(matches!(err, ExtractError::Pdf(_)));
+    }
+
+    #[test]
+    fn extract_by_content_type_dispatches_html_to_the_html_extractor() {
+        let result = extract_by_content_type("text", Some("html"), b"<p>Hi</p>");
+        assert_eq!(result.unwrap().unwrap(), "Hi");
+    }
+
+    #[test]
+    fn extract_by_content_type_has_no_extractor_for_an_unknown_type() {
+        assert!(extract_by_content_type("image", Some("png"), b"\x89PNG").is_none());
     }
 }

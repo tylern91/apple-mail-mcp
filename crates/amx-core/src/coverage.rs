@@ -35,6 +35,18 @@ impl BodyState {
     pub fn is_retryable(&self) -> bool {
         !matches!(self, Self::Unavailable(_))
     }
+
+    /// A tag-only encoding for Tantivy's `body_state` fast field (umbrella §5.1) — variant
+    /// payloads (e.g. `Quarantined`'s error kind) are never recoverable from this value alone and
+    /// must be re-derived from the store at access time.
+    pub fn discriminant(&self) -> u64 {
+        match self {
+            Self::Indexed => 0,
+            Self::Pending { .. } => 1,
+            Self::Unavailable(_) => 2,
+            Self::Quarantined { .. } => 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +72,18 @@ impl AttachmentState {
     /// fetch the full message via JXA. Every other state is not awaiting a future fetch.
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::NotDownloaded { .. })
+    }
+
+    /// A tag-only encoding for Tantivy's `attachment_state` fast field (umbrella §5.1) —
+    /// `NotDownloaded`'s byte counts are never recoverable from this value alone and must be
+    /// re-derived from the completeness oracle at access time.
+    pub fn discriminant(&self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::Extracted { .. } => 1,
+            Self::NotDownloaded { .. } => 2,
+            Self::Unextractable { .. } => 3,
+        }
     }
 }
 

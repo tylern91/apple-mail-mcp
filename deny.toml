@@ -17,6 +17,9 @@ allow = [
   # foldhash (transitive via rusqlite -> sqlite-wasm-rs -> hashbrown): permissive,
   # OSI-approved, not GPL-family — no conflict with §1.4's copyleft boundary.
   "Zlib",
+  # notify (task 8, FSEvents watcher): public-domain-equivalent, permissive,
+  # not GPL-family — no conflict with §1.4's copyleft boundary.
+  "CC0-1.0",
 ]
 confidence-threshold = 0.8
 
