@@ -1,0 +1,14 @@
+[package]
+name = "amx-compose"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+publish = false
+description = "MIME message composition for outbound mail"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }

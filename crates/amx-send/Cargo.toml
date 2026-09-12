@@ -1,0 +1,15 @@
+[package]
+name = "amx-send"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+publish = false
+description = "SMTP delivery of composed messages"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }
+amx-compose = { path = "../amx-compose" }

@@ -1,0 +1,13 @@
+[package]
+name = "amx-core"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+publish = false
+description = "Shared types, config, and error definitions for apple-mail-mcp"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
