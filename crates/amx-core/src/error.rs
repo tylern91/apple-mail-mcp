@@ -119,6 +119,16 @@ pub enum AmxError {
     #[error("Mail store not found at {0} — is Mail.app configured on this Mac?")]
     StoreNotFound(PathBuf),
 
+    #[error("mailbox url {url:?} is not a `scheme://account/segment...` url")]
+    MailboxUrlMalformed { url: String },
+
+    #[error("could not locate mailbox {url:?} on disk at {path} ({reason})")]
+    MailboxPathUnresolvable {
+        url: String,
+        path: PathBuf,
+        reason: String,
+    },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 
