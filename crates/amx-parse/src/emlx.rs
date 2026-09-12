@@ -10,7 +10,7 @@ use std::path::Path;
 
 use amx_core::ParseError;
 use amx_core::coverage::AttachmentState;
-use mail_parser::{Address, MessageParser};
+use mail_parser::{Address, Message, MessageParser, MimeHeaders};
 use serde::Deserialize;
 
 use crate::completeness;
@@ -70,6 +70,21 @@ pub struct ParsedMessage {
     pub body_html: Option<String>,
     pub footer: EmlxFooter,
     pub attachments: AttachmentState,
+    /// Raw bytes and MIME identity of each attachment part — only ever populated when
+    /// `attachments` is [`AttachmentState::Extracted`] (decision E6); every other state means the
+    /// bytes are absent, uncounted, or already known unreadable, so there is nothing to carry.
+    pub attachment_parts: Vec<AttachmentPart>,
+}
+
+/// One attachment's raw bytes plus enough MIME identity to pick a text extractor for it
+/// (`amx-parse::extract::extract_by_content_type`) — the extraction itself is a caller's choice,
+/// not something parsing forces on every message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttachmentPart {
+    pub name: Option<String>,
+    pub content_type: Option<String>,
+    pub content_subtype: Option<String>,
+    pub bytes: Vec<u8>,
 }
 
 /// Parses the raw bytes of a `.emlx` file (already read from `path`, which is carried only for
@@ -86,6 +101,11 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
 
     let footer = parse_footer(path, footer_bytes)?;
     let attachments = completeness::attachment_state(&message, message_bytes.len() as u64);
+    let attachment_parts = if matches!(attachments, AttachmentState::Extracted { .. }) {
+        collect_attachment_parts(&message)
+    } else {
+        Vec::new()
+    };
 
     Ok(ParsedMessage {
         subject: message.subject().map(str::to_string),
@@ -97,7 +117,22 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
         body_html: message.body_html(0).map(|s| s.into_owned()),
         footer,
         attachments,
+        attachment_parts,
     })
+}
+
+fn collect_attachment_parts(message: &Message<'_>) -> Vec<AttachmentPart> {
+    message
+        .attachments()
+        .map(|part| AttachmentPart {
+            name: part.attachment_name().map(str::to_string),
+            content_type: part.content_type().map(|ct| ct.c_type.to_string()),
+            content_subtype: part
+                .content_type()
+                .and_then(|ct| ct.c_subtype.as_ref().map(|s| s.to_string())),
+            bytes: part.contents().to_vec(),
+        })
+        .collect()
 }
 
 fn collect_addresses(address: Option<&Address<'_>>) -> Vec<EmlxAddress> {
@@ -191,6 +226,49 @@ mod tests {
             parsed.attachments,
             amx_core::coverage::AttachmentState::None
         );
+        assert!(parsed.attachment_parts.is_empty());
+    }
+
+    /// Decision E6: a fully-downloaded message's attachment bytes are carried on
+    /// [`ParsedMessage::attachment_parts`], with enough MIME identity to pick a text extractor.
+    #[test]
+    fn extracted_attachment_state_populates_attachment_parts() {
+        let message = concat!(
+            "Content-Type: multipart/mixed; boundary=b\r\n",
+            "\r\n",
+            "--b\r\n",
+            "Content-Type: text/plain\r\n",
+            "\r\n",
+            "body\r\n",
+            "--b\r\n",
+            "Content-Type: application/pdf\r\n",
+            "Content-Disposition: attachment; filename=r.pdf\r\n",
+            "\r\n",
+            "%PDF-1.4 fixture bytes\r\n",
+            "--b--\r\n",
+        );
+        let footer = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+            "<plist version=\"1.0\"><dict></dict></plist>\n",
+        );
+        let mut bytes = format!("{:<10}\n", message.len()).into_bytes();
+        bytes.extend_from_slice(message.as_bytes());
+        bytes.extend_from_slice(footer.as_bytes());
+
+        let parsed = parse_emlx(Path::new("attachment.emlx"), &bytes).unwrap();
+
+        assert_eq!(
+            parsed.attachments,
+            amx_core::coverage::AttachmentState::Extracted { count: 1 }
+        );
+        assert_eq!(parsed.attachment_parts.len(), 1);
+        let part = &parsed.attachment_parts[0];
+        assert_eq!(part.name.as_deref(), Some("r.pdf"));
+        assert_eq!(part.content_type.as_deref(), Some("application"));
+        assert_eq!(part.content_subtype.as_deref(), Some("pdf"));
+        assert!(part.bytes.starts_with(b"%PDF-1.4"));
     }
 
     /// End-to-end proof of the completeness oracle (§4.2.4), modeled on the live store's ROWID
