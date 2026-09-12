@@ -129,6 +129,9 @@ pub enum AmxError {
         reason: String,
     },
 
+    #[error("search query {query:?} could not be parsed: {reason}")]
+    SearchQueryInvalid { query: String, reason: String },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 

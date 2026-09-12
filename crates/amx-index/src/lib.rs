@@ -7,6 +7,7 @@ pub mod quarantine;
 pub mod reader;
 pub mod reconcile;
 pub mod schema;
+pub mod search;
 pub mod sync;
 #[cfg(target_os = "macos")]
 pub mod watch;
