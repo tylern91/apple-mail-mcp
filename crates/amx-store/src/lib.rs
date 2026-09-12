@@ -4,6 +4,7 @@ pub mod fixtures;
 pub mod mailbox_path;
 pub mod paths;
 pub mod query;
+pub mod readiness;
 pub mod registry;
 #[cfg(target_os = "macos")]
 pub mod tcc;

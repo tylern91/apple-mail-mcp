@@ -61,6 +61,16 @@ impl IndexWriter {
     }
 }
 
+/// Read-only inspection for `doctor`/`status` (Phase 3 task 8): describes the current writer as
+/// `"process (pid)"` if the lock is held by a live process, or `None` if the index is free or
+/// the lock row is stale. Unlike [`IndexWriter::acquire`], a stale row is reported as free rather
+/// than reclaimed — reclaiming is a mutation this read-only check must not perform.
+pub fn busy_status(conn: &Connection) -> Result<Option<String>, AmxError> {
+    Ok(read_lock(conn)?
+        .filter(|lock| is_alive(lock.pid))
+        .map(|lock| format!("{} ({})", lock.process, lock.pid)))
+}
+
 impl Drop for IndexWriterGuard {
     fn drop(&mut self) {
         let _ = self.conn.execute(
@@ -181,5 +191,45 @@ mod tests {
 
         let guard = IndexWriter::acquire(&meta_path).unwrap();
         assert_eq!(guard.pid, std::process::id());
+    }
+
+    #[test]
+    fn busy_status_is_none_when_the_index_is_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta_path = dir.path().join("meta.sqlite");
+        let conn = meta::open(&meta_path).unwrap();
+
+        assert_eq!(busy_status(&conn).unwrap(), None);
+    }
+
+    #[test]
+    fn busy_status_names_the_live_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta_path = dir.path().join("meta.sqlite");
+        let conn = meta::open(&meta_path).unwrap();
+        conn.execute(
+            "INSERT INTO writer_lock (id, pid, process, since) VALUES (1, ?1, 'amxcli', 0)",
+            params![std::process::id()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            busy_status(&conn).unwrap(),
+            Some(format!("amxcli ({})", std::process::id()))
+        );
+    }
+
+    #[test]
+    fn busy_status_ignores_a_stale_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta_path = dir.path().join("meta.sqlite");
+        let conn = meta::open(&meta_path).unwrap();
+        conn.execute(
+            "INSERT INTO writer_lock (id, pid, process, since) VALUES (1, 999999999, 'ghost', 0)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(busy_status(&conn).unwrap(), None);
     }
 }

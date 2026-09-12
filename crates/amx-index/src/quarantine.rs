@@ -69,6 +69,12 @@ pub(crate) fn record(
     Ok(())
 }
 
+/// The number of currently quarantined messages, for `doctor`'s `quarantined_count` (task 8).
+pub fn count(conn: &Connection) -> Result<usize, AmxError> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM quarantine", [], |row| row.get(0))?;
+    Ok(count as usize)
+}
+
 fn error_kind_str(kind: ParseErrorKind) -> &'static str {
     match kind {
         ParseErrorKind::MalformedEnvelope => "malformed_envelope",
@@ -182,5 +188,24 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn count_reflects_the_quarantine_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = meta::open(&dir.path().join("meta.sqlite")).unwrap();
+        assert_eq!(count(&conn).unwrap(), 0);
+
+        run_batch(
+            &conn,
+            &[BatchItem {
+                rowid: 1,
+                path: "bad-footer.emlx".into(),
+                bytes: malformed_footer_bytes(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(count(&conn).unwrap(), 1);
     }
 }
