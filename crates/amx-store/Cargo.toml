@@ -1,0 +1,15 @@
+[package]
+name = "amx-store"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "Read access to Apple Mail's SQLite Envelope Index and on-disk mailbox layout"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }

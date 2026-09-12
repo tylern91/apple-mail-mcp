@@ -1,0 +1,15 @@
+[package]
+name = "amx-index"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "Tantivy-backed full-text index over parsed mail content"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }

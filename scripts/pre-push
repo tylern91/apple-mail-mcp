@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# pre-push hook: blocks v* tag pushes unless the workspace version and
+# CHANGELOG are consistent. Install by symlinking into .git/hooks/pre-push.
+#
+# rqmd's equivalent hook greps each crate's Cargo.toml for '^version = ',
+# but every crate here inherits `version.workspace = true` — that pattern
+# never matches, so the check silently no-ops instead of blocking anything.
+# This version checks the single source of truth instead: the
+# [workspace.package] version in the root Cargo.toml.
+set -euo pipefail
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Only gate on tag pushes matching v*
+  if [[ "$local_ref" != refs/tags/v* ]]; then
+    continue
+  fi
+
+  TAG="${local_ref#refs/tags/}"
+  VERSION="${TAG#v}"
+
+  # 1. Check that the workspace version matches the tag
+  WORKSPACE_VERSION=$(awk '
+    /^\[workspace\.package\]/ { in_section = 1; next }
+    /^\[/ { in_section = 0 }
+    in_section && /^version[[:space:]]*=/ {
+      match($0, /"[^"]+"/)
+      print substr($0, RSTART + 1, RLENGTH - 2)
+      exit
+    }
+  ' Cargo.toml)
+  if [[ "$WORKSPACE_VERSION" != "$VERSION" ]]; then
+    echo "ERROR: Cargo.toml [workspace.package] version '$WORKSPACE_VERSION' does not match tag '$TAG'" >&2
+    exit 1
+  fi
+
+  # 2. Check that CHANGELOG.md has a [X.Y.Z] entry
+  if ! grep -qE "^\#\# \[$VERSION\]" CHANGELOG.md; then
+    echo "ERROR: CHANGELOG.md has no '## [$VERSION]' entry" >&2
+    exit 1
+  fi
+
+  echo "pre-push: version and changelog checks passed for $TAG"
+done
+
+exit 0

@@ -1,0 +1,15 @@
+[package]
+name = "amx-parse"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "Parsing of .emlx message files into structured MIME data"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }

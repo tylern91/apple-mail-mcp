@@ -1,0 +1,20 @@
+[package]
+name = "amx-cli"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "CLI entry point (amxcli) for apple-mail-mcp"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "amxcli"
+path = "src/main.rs"
+
+[dependencies]
+amx-core = { path = "../amx-core" }
+amx-mcp = { path = "../amx-mcp" }

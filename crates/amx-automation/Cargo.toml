@@ -1,0 +1,16 @@
+[package]
+name = "amx-automation"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "Mail.app automation for mutating operations (move, flag, delete)"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }
+amx-store = { path = "../amx-store" }

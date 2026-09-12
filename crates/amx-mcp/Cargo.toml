@@ -1,0 +1,16 @@
+[package]
+name = "amx-mcp"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+edition = "2024"
+publish = false
+description = "MCP protocol server exposing Apple Mail read/mutate/send tools"
+repository = "https://github.com/tylern91/apple-mail-mcp"
+
+[lints]
+workspace = true
+
+[dependencies]
+amx-core = { path = "../amx-core" }
+amx-index = { path = "../amx-index" }
