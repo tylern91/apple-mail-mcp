@@ -70,9 +70,11 @@ pub struct ParsedMessage {
     pub body_html: Option<String>,
     pub footer: EmlxFooter,
     pub attachments: AttachmentState,
-    /// Raw bytes and MIME identity of each attachment part — only ever populated when
-    /// `attachments` is [`AttachmentState::Extracted`] (decision E6); every other state means the
-    /// bytes are absent, uncounted, or already known unreadable, so there is nothing to carry.
+    /// Name/MIME-type identity of every attachment part, always populated from the MIME headers
+    /// regardless of `attachments` state — `bytes` is empty unless `attachments` is
+    /// [`AttachmentState::Extracted`] (decision E6), since only then did the content itself reach
+    /// disk. A caller resolving `amx_core::AmxError::AttachmentNotDownloaded`/`AttachmentNotFound`
+    /// needs a name to report even when the bytes are missing.
     pub attachment_parts: Vec<AttachmentPart>,
 }
 
@@ -101,11 +103,10 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
 
     let footer = parse_footer(path, footer_bytes)?;
     let attachments = completeness::attachment_state(&message, message_bytes.len() as u64);
-    let attachment_parts = if matches!(attachments, AttachmentState::Extracted { .. }) {
-        collect_attachment_parts(&message)
-    } else {
-        Vec::new()
-    };
+    let attachment_parts = collect_attachment_parts(
+        &message,
+        matches!(attachments, AttachmentState::Extracted { .. }),
+    );
 
     Ok(ParsedMessage {
         subject: message.subject().map(str::to_string),
@@ -121,7 +122,12 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
     })
 }
 
-fn collect_attachment_parts(message: &Message<'_>) -> Vec<AttachmentPart> {
+/// Attachment name/MIME-type metadata comes straight from the MIME headers, present whether or
+/// not the body bytes made it to disk (a `.partial.emlx` still carries the attachment part's
+/// headers, just not its content) — only `bytes` is gated on `include_bytes`, so a caller can
+/// name *which* attachment is missing (`AmxError::AttachmentNotDownloaded`) without mistaking a
+/// truncated read for real content.
+fn collect_attachment_parts(message: &Message<'_>, include_bytes: bool) -> Vec<AttachmentPart> {
     message
         .attachments()
         .map(|part| AttachmentPart {
@@ -130,7 +136,11 @@ fn collect_attachment_parts(message: &Message<'_>) -> Vec<AttachmentPart> {
             content_subtype: part
                 .content_type()
                 .and_then(|ct| ct.c_subtype.as_ref().map(|s| s.to_string())),
-            bytes: part.contents().to_vec(),
+            bytes: if include_bytes {
+                part.contents().to_vec()
+            } else {
+                Vec::new()
+            },
         })
         .collect()
 }
@@ -269,6 +279,49 @@ mod tests {
         assert_eq!(part.content_type.as_deref(), Some("application"));
         assert_eq!(part.content_subtype.as_deref(), Some("pdf"));
         assert!(part.bytes.starts_with(b"%PDF-1.4"));
+    }
+
+    /// Mirrors the live store's ROWID 42191 (§10 adversarial case): a partial download still
+    /// carries its attachment's `Content-Disposition`/`filename` headers, so a caller can name
+    /// *which* attachment is missing even though no attachment bytes reached disk.
+    #[test]
+    fn not_downloaded_attachment_state_populates_metadata_without_bytes() {
+        let message = concat!(
+            "X-Apple-Content-Length: 999999\r\n",
+            "Content-Type: multipart/mixed; boundary=b\r\n",
+            "\r\n",
+            "--b\r\n",
+            "Content-Type: text/plain\r\n",
+            "\r\n",
+            "body\r\n",
+            "--b\r\n",
+            "Content-Type: application/pdf\r\n",
+            "Content-Disposition: ATTACHMENT; filename=r.pdf\r\n",
+            "\r\n",
+            "--b--\r\n",
+        );
+        let footer = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+            "<plist version=\"1.0\"><dict></dict></plist>\n",
+        );
+        let mut bytes = format!("{:<10}\n", message.len()).into_bytes();
+        bytes.extend_from_slice(message.as_bytes());
+        bytes.extend_from_slice(footer.as_bytes());
+
+        let parsed = parse_emlx(Path::new("partial.emlx"), &bytes).unwrap();
+
+        assert!(matches!(
+            parsed.attachments,
+            amx_core::coverage::AttachmentState::NotDownloaded { .. }
+        ));
+        assert_eq!(parsed.attachment_parts.len(), 1);
+        let part = &parsed.attachment_parts[0];
+        assert_eq!(part.name.as_deref(), Some("r.pdf"));
+        assert_eq!(part.content_type.as_deref(), Some("application"));
+        assert_eq!(part.content_subtype.as_deref(), Some("pdf"));
+        assert!(part.bytes.is_empty());
     }
 
     /// End-to-end proof of the completeness oracle (§4.2.4), modeled on the live store's ROWID

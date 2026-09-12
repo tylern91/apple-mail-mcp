@@ -108,6 +108,19 @@ pub enum AmxError {
         declared: u64,
     },
 
+    #[error("message {0} not found in the local store")]
+    MessageNotFound(i64),
+
+    #[error("message {rowid} has no attachment named {name:?}")]
+    AttachmentNotFound { rowid: i64, name: String },
+
+    #[error("attachment {name:?} on message {rowid} could not be extracted to text: {reason}")]
+    AttachmentUnextractable {
+        rowid: i64,
+        name: String,
+        reason: String,
+    },
+
     #[error("message {rowid} body unavailable: {reason}")]
     BodyUnavailable {
         rowid: i64,

@@ -17,6 +17,7 @@ amx-index = { path = "../amx-index" }
 amx-parse = { path = "../amx-parse" }
 amx-store = { path = "../amx-store" }
 axum = "0.8"
+base64 = "0.22"
 rmcp = { version = "3.3", features = ["server", "macros", "transport-io", "transport-async-rw", "transport-streamable-http-server", "transport-streamable-http-server-session"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

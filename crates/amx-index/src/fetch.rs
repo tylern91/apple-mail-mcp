@@ -3,7 +3,7 @@
 //! result so `classify.rs` never needs to re-derive it.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use amx_store::paths::EmlxPathResolver;
 
@@ -32,6 +32,15 @@ impl BodyFetcher {
             Err(_) => FetchedBody::Absent,
         }
     }
+}
+
+/// The path recorded against a message — whichever of the full/partial `.emlx` paths
+/// [`BodyFetcher::fetch`] actually found, or the full path when neither exists (there is nothing
+/// to distinguish in that case). Shared by `sync.rs` and `amx-mcp`'s message-read handlers so
+/// both agree on which path a quarantine/classification record points at.
+pub fn resolved_emlx_path(mailbox_dir: &Path, rowid: i64, fetched: &FetchedBody) -> PathBuf {
+    let partial = matches!(fetched, FetchedBody::Partial(_));
+    EmlxPathResolver::resolve(mailbox_dir, rowid, partial)
 }
 
 #[cfg(test)]
