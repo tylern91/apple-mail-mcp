@@ -80,6 +80,7 @@ dependencies = [
  "amx-core",
  "amx-parse",
  "amx-store",
+ "rusqlite",
  "tantivy",
  "tempfile",
 ]

@@ -15,6 +15,7 @@ workspace = true
 amx-core = { path = "../amx-core", features = ["tantivy"] }
 amx-parse = { path = "../amx-parse" }
 amx-store = { path = "../amx-store" }
+rusqlite = { version = "0.40", features = ["bundled"] }
 tantivy = "0.26"
 
 [dev-dependencies]
