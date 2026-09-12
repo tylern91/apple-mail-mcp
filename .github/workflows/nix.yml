@@ -1,0 +1,36 @@
+name: nix
+
+on:
+  push:
+    branches: [release]
+  pull_request:
+    branches: [release]
+
+permissions:
+  contents: read
+
+jobs:
+  check-flake:
+    name: nix flake check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Flake check
+        run: nix flake check --no-build
+
+      - name: Dev shell smoke test
+        run: nix develop --command cargo --version

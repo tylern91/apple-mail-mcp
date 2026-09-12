@@ -1,0 +1,187 @@
+name: publish-assets
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      label:
+        required: true
+        type: string
+      breaking:
+        required: true
+        type: string
+      prev:
+        required: true
+        type: string
+      pr_number:
+        required: false
+        type: string
+        default: ""
+      sync_homebrew:
+        required: false
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re-)publish assets for, e.g. v0.2.0"
+        required: true
+        type: string
+      label:
+        required: true
+        type: choice
+        options: [patch, minor, major]
+      breaking:
+        type: boolean
+        default: false
+      prev:
+        description: "Previous tag, for the release-notes compare link"
+        type: string
+        default: ""
+      pr_number:
+        type: string
+        default: ""
+      sync_homebrew:
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  upload-assets:
+    name: Build + upload (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # apple-mail-mcp reads Mail.app's on-disk store and drives it via
+          # AppleScript/Automation — it has no meaning off macOS, so unlike
+          # rqmd there is no Linux leg in this matrix.
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            name_suffix: macos-arm64
+    outputs:
+      sha256_darwin: ${{ steps.digest.outputs.sha256_darwin }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Build dist binary
+        run: cargo build --profile dist -p amx-cli --target ${{ matrix.target }} --locked
+
+      - name: Assert binary version matches tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/dist/amxcli"
+          version="$(TAG_STRIPPED="${TAG#v}"; echo "$TAG_STRIPPED")"
+          got="$("$bin" --version | awk '{print $NF}')"
+          if [ "$got" != "$version" ]; then
+            echo "::error::binary reports version $got, expected $version"
+            exit 1
+          fi
+
+      - name: Package tarball
+        id: pkg
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag }}"
+          name="amx-cli-${version}-${{ matrix.name_suffix }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/dist/amxcli" "dist/$name/amxcli"
+          cp README.md LICENSE "dist/$name/"
+          tar -czf "dist/${name}.tar.gz" -C dist "$name"
+          printf 'archive=dist/%s.tar.gz\n' "$name" >> "$GITHUB_OUTPUT"
+
+      - name: Compute digest
+        id: digest
+        run: |
+          sum="$(shasum -a 256 "${{ steps.pkg.outputs.archive }}" | awk '{print $1}')"
+          printf 'sha256_darwin=%s\n' "$sum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.tag }}" "${{ steps.pkg.outputs.archive }}" --clobber
+
+  finalize-notes:
+    name: Finalize release notes with asset digests
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ASSET_SHA256_DARWIN: ${{ needs.upload-assets.outputs.sha256_darwin }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Re-render release notes with real digests
+        run: |
+          bash scripts/build-release-notes.sh \
+            "${{ inputs.tag }}" \
+            "${{ inputs.label }}" \
+            "${{ inputs.breaking }}" \
+            --from-existing \
+            --prev "${{ inputs.prev }}" \
+            > /tmp/RELEASE_BODY.md
+          gh release edit "${{ inputs.tag }}" --notes-file /tmp/RELEASE_BODY.md
+
+  sync-homebrew:
+    name: Sync Homebrew tap
+    needs: [upload-assets, finalize-notes]
+    if: inputs.sync_homebrew && vars.HOMEBREW_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Mint tap token from GitHub App
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.HOMEBREW_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: tylern91
+          repositories: homebrew-apple-mail-mcp
+
+      - name: Update formula
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          version="${{ inputs.tag }}"
+          bash scripts/update-homebrew-formula.sh "${version#v}"

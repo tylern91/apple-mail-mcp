@@ -1,0 +1,166 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "CHANGELOG.md"
+      - "scripts/check-version-sync.sh"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "CHANGELOG.md"
+      - "scripts/check-version-sync.sh"
+      - ".github/workflows/rust.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  version-sync:
+    name: Version sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check Cargo.toml version matches CHANGELOG
+        run: bash scripts/check-version-sync.sh
+
+  check-portable:
+    name: Build portable crates (Linux x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x64-portable
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      # amx-store, amx-automation, amx-send, amx-mcp, amx-cli pull in macOS-only
+      # crates transitively — only the four portable crates build on Linux.
+      - name: Clippy (portable crates)
+        run: cargo clippy -p amx-core -p amx-parse -p amx-index -p amx-compose --all-targets --locked -- -D warnings
+
+      - name: Build (portable crates)
+        run: cargo build --locked -p amx-core -p amx-parse -p amx-index -p amx-compose
+
+      - name: Test (portable crates)
+        run: cargo test --locked -p amx-core -p amx-parse -p amx-index -p amx-compose
+
+  test-macos:
+    name: Build + test (macOS ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.arch }}
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build (workspace)
+        run: cargo build --workspace --locked
+
+      - name: Test (workspace)
+        run: cargo test --workspace --locked
+
+  dist-binary:
+    name: Release binary (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 60
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check-portable, test-macos]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-arm64-dist
+          cache-on-failure: true
+
+      - name: Build dist binary
+        run: cargo build --profile dist -p amx-cli --locked
+
+      - name: Show binary info
+        run: |
+          ls -lh target/dist/amxcli
+          file target/dist/amxcli
+          otool -L target/dist/amxcli | head -20
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: amxcli-macos-arm64
+          path: target/dist/amxcli
+          retention-days: 30

@@ -1,0 +1,28 @@
+# cargo-deny configuration — licence gate for apple-mail-mcp.
+#
+# This project is MIT-licensed and must not depend on GPL-family code (see
+# umbrella spec §1.4). rqmd, the sibling template repo, has no equivalent
+# cargo-deny setup — this is authored fresh for apple-mail-mcp.
+#
+# Usage: cargo deny check licenses
+
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+
+[advisories]
+ignore = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
