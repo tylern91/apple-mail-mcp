@@ -83,6 +83,12 @@ jobs:
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         if: always() # upload even if the blocking step below fails
+        # continue-on-error: this repo is private, and code scanning (the Security
+        # tab surface this uploads to) requires GitHub Advanced Security, which
+        # isn't enabled on a private repo by default. The upload attempt is kept —
+        # it starts working the moment GHAS is enabled — but must never fail the
+        # job over a feature this repo may not have access to.
+        continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
 
