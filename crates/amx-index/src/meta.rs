@@ -39,6 +39,13 @@ CREATE TABLE IF NOT EXISTS mailbox_counts (
     unread INTEGER NOT NULL,
     deleted INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS health_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    state TEXT NOT NULL,
+    responsible_process TEXT,
+    since INTEGER NOT NULL
+);
 "#;
 
 /// Opens (creating if absent) the meta database at `path` and ensures its schema exists.
@@ -102,6 +109,38 @@ pub fn save_sync_state(conn: &Connection, state: &SyncState) -> Result<(), AmxEr
         )?;
     }
     Ok(())
+}
+
+/// Appends a `health_transitions` row for `amx-mcp`'s `HealthMonitor` (Phase 3 task 7). Each row
+/// is a full transition record rather than a single "current state" row so `doctor` can report
+/// how long the store has been in its current state ("denied since 08-07 (4 days)") without a
+/// separate started-at column that could drift out of sync with the row it describes.
+pub fn record_health_transition(
+    conn: &Connection,
+    state: &str,
+    responsible_process: Option<&str>,
+    since: i64,
+) -> Result<(), AmxError> {
+    conn.execute(
+        "INSERT INTO health_transitions (state, responsible_process, since) VALUES (?1, ?2, ?3)",
+        params![state, responsible_process, since],
+    )?;
+    Ok(())
+}
+
+/// The most recently recorded transition, or `None` on a fresh `meta.sqlite` that has never
+/// run a health probe.
+pub fn last_health_transition(
+    conn: &Connection,
+) -> Result<Option<(String, Option<String>, i64)>, AmxError> {
+    conn.query_row(
+        "SELECT state, responsible_process, since FROM health_transitions \
+         ORDER BY id DESC LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .optional()
+    .map_err(AmxError::from)
 }
 
 #[cfg(test)]
@@ -184,5 +223,26 @@ mod tests {
         save_sync_state(&conn, &second_state).unwrap();
 
         assert_eq!(load_sync_state(&conn).unwrap(), second_state);
+    }
+
+    #[test]
+    fn a_fresh_database_has_no_health_transition() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let conn = open(file.path()).unwrap();
+        assert_eq!(last_health_transition(&conn).unwrap(), None);
+    }
+
+    #[test]
+    fn health_transitions_are_recorded_newest_first() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let conn = open(file.path()).unwrap();
+
+        record_health_transition(&conn, "denied", Some("amxcli"), 100).unwrap();
+        record_health_transition(&conn, "granted", None, 200).unwrap();
+
+        assert_eq!(
+            last_health_transition(&conn).unwrap(),
+            Some(("granted".to_string(), None, 200))
+        );
     }
 }
