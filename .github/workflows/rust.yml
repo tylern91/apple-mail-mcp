@@ -73,16 +73,16 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-      # amx-store, amx-automation, amx-send, amx-mcp, amx-cli pull in macOS-only
-      # crates transitively — only the four portable crates build on Linux.
+      # amx-automation, amx-send, amx-mcp, amx-cli pull in macOS-only crates transitively —
+      # amx-store is portable (its tcc/watch modules are the only macOS-gated parts).
       - name: Clippy (portable crates)
-        run: cargo clippy -p amx-core -p amx-parse -p amx-index -p amx-compose --all-targets --locked -- -D warnings
+        run: cargo clippy -p amx-core -p amx-parse -p amx-index -p amx-compose -p amx-store --all-targets --locked -- -D warnings
 
       - name: Build (portable crates)
-        run: cargo build --locked -p amx-core -p amx-parse -p amx-index -p amx-compose
+        run: cargo build --locked -p amx-core -p amx-parse -p amx-index -p amx-compose -p amx-store
 
       - name: Test (portable crates)
-        run: cargo test --locked -p amx-core -p amx-parse -p amx-index -p amx-compose
+        run: cargo test --locked -p amx-core -p amx-parse -p amx-index -p amx-compose -p amx-store
 
   test-macos:
     name: Build + test (macOS ${{ matrix.arch }})

@@ -12,4 +12,5 @@ repository = "https://github.com/tylern91/apple-mail-mcp"
 workspace = true
 
 [dependencies]
-amx-core = { path = "../amx-core" }
+amx-core = { path = "../amx-core", features = ["sqlite"] }
+rusqlite = { version = "0.40", features = ["bundled"] }

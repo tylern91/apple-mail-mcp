@@ -1,1 +1,3 @@
-#![cfg(target_os = "macos")]
+pub mod conn;
+
+pub use conn::RoConnection;
