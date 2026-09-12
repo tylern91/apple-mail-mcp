@@ -73,6 +73,63 @@ impl MailboxRegistry {
     pub fn is_empty(&self) -> bool {
         self.by_normalized_url.is_empty()
     }
+
+    /// Mailboxes whose URL host segment is `account_identifier` — the account UUID that also
+    /// names its `~/Library/Mail/V10/<UUID>` directory.
+    pub fn mailboxes_for_account<'a>(
+        &'a self,
+        account_identifier: &str,
+    ) -> impl Iterator<Item = &'a Mailbox> {
+        let needle = format!("//{}/", account_identifier.to_lowercase());
+        self.by_normalized_url
+            .values()
+            .filter(move |mailbox| mailbox.url.to_lowercase().contains(&needle))
+    }
+
+    /// The `limit` mailbox URLs closest to `query` by edit distance — used to populate
+    /// [`amx_core::AmxError::MailboxFilterUnmatched`]'s suggestions so an unmatched filter never
+    /// just comes back empty.
+    pub fn suggest(&self, query: &str, limit: usize) -> Vec<String> {
+        let normalized_query = normalize(query);
+        let mut scored: Vec<(usize, &Mailbox)> = self
+            .by_normalized_url
+            .values()
+            .map(|mailbox| {
+                (
+                    levenshtein(&normalized_query, &normalize(&mailbox.url)),
+                    mailbox,
+                )
+            })
+            .collect();
+        scored.sort_by_key(|(distance, _)| *distance);
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, mailbox)| mailbox.url.clone())
+            .collect()
+    }
+}
+
+/// Plain Levenshtein edit distance — good enough for "closest mailbox name" suggestions; this
+/// isn't ranking search results, so no need for a weighted or phonetic algorithm.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let temp = row[j + 1];
+            row[j + 1] = if ca == cb {
+                prev
+            } else {
+                1 + prev.min(row[j]).min(row[j + 1])
+            };
+            prev = temp;
+        }
+    }
+    row[b.len()]
 }
 
 /// percent-decode -> NFC -> casefold, in that order — the order the umbrella spec requires so
