@@ -17,3 +17,9 @@
 # footgun — one accidental commit of a 6-9 MB tarball goes straight into LFS against
 # the 1 GB free quota. Re-add only if a real binary asset in one of these extensions
 # needs to be committed to the repo.
+
+# .emlx fixtures embed an exact byte-count prefix (§4.1's 10-byte count line) — CRLF
+# normalization under core.autocrlf=input silently shortens them on commit, breaking
+# the very byte count the parser trusts. Not LFS (too small to matter); `binary` is
+# enough to stop normalization.
+crates/amx-parse/tests/fixtures/emlx/*.emlx binary
