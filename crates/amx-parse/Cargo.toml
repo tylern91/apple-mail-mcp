@@ -13,3 +13,6 @@ workspace = true
 
 [dependencies]
 amx-core = { path = "../amx-core" }
+mail-parser = "0.11"
+plist = "1"
+serde = { version = "1", features = ["derive"] }

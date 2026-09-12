@@ -1,0 +1,27 @@
+320       
+Return-Path: <sender@example.com>
+From: Fixture Sender <sender@example.com>
+To: Fixture Recipient <recipient@example.com>
+Subject: Fixture subject with raw date byte
+Date: Sat, 14 Dec 2019 ÿ0:19:53 -0800
+Message-Id: <fixture-2@example.com>
+Content-Type: text/plain; charset=utf-8
+Mime-Version: 1.0
+
+Body text.
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>conversation-id</key>
+	<integer>176</integer>
+	<key>date-last-viewed</key>
+	<integer>0</integer>
+	<key>date-received</key>
+	<integer>1576065593</integer>
+	<key>flags</key>
+	<integer>8590195713</integer>
+	<key>remote-id</key>
+	<string>13</string>
+</dict>
+</plist>
