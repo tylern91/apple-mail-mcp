@@ -1,0 +1,28 @@
+392       
+X-Apple-Content-Length: 999999
+From: sender@example.com
+To: recipient@example.com
+Subject: Partial fixture subject
+Content-Type: multipart/mixed; boundary=fixture-boundary
+
+--fixture-boundary
+Content-Type: text/plain
+
+This is the partial fixture body.
+--fixture-boundary
+Content-Type: application/pdf
+Content-Disposition: ATTACHMENT; filename=receipt.pdf
+
+--fixture-boundary--
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>date-received</key>
+	<integer>1576065593</integer>
+	<key>flags</key>
+	<integer>8590195713</integer>
+	<key>remote-id</key>
+	<string>42191</string>
+</dict>
+</plist>

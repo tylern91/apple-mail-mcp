@@ -9,8 +9,11 @@
 use std::path::Path;
 
 use amx_core::ParseError;
+use amx_core::coverage::AttachmentState;
 use mail_parser::{Address, MessageParser};
 use serde::Deserialize;
+
+use crate::completeness;
 
 /// The count line is always exactly 10 bytes (verified: every sampled `.emlx` in the live store
 /// has `nl == 10`), left-justified and space-padded, followed by `\n`.
@@ -56,7 +59,7 @@ impl From<FooterPlist> for EmlxFooter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedMessage {
     pub subject: Option<String>,
     pub from: Vec<EmlxAddress>,
@@ -66,6 +69,7 @@ pub struct ParsedMessage {
     pub body_text: Option<String>,
     pub body_html: Option<String>,
     pub footer: EmlxFooter,
+    pub attachments: AttachmentState,
 }
 
 /// Parses the raw bytes of a `.emlx` file (already read from `path`, which is carried only for
@@ -81,6 +85,7 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
         })?;
 
     let footer = parse_footer(path, footer_bytes)?;
+    let attachments = completeness::attachment_state(&message, message_bytes.len() as u64);
 
     Ok(ParsedMessage {
         subject: message.subject().map(str::to_string),
@@ -91,6 +96,7 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
         body_text: message.body_text(0).map(|s| s.into_owned()),
         body_html: message.body_html(0).map(|s| s.into_owned()),
         footer,
+        attachments,
     })
 }
 
@@ -181,6 +187,23 @@ mod tests {
         assert_eq!(parsed.footer.conversation_id, Some(176));
         assert_eq!(parsed.footer.date_received, Some(1_576_065_593));
         assert_eq!(parsed.footer.remote_id.as_deref(), Some("13"));
+        assert_eq!(
+            parsed.attachments,
+            amx_core::coverage::AttachmentState::None
+        );
+    }
+
+    /// End-to-end proof of the completeness oracle (§4.2.4), modeled on the live store's ROWID
+    /// 42191: `X-Apple-Content-Length` declares more bytes than the `.emlx` actually carries.
+    #[test]
+    fn declared_content_length_past_on_disk_size_yields_not_downloaded() {
+        let bytes = fixture("partial_no_attachment.emlx");
+        let parsed = parse_emlx(Path::new("partial_no_attachment.emlx"), &bytes).unwrap();
+
+        assert!(matches!(
+            parsed.attachments,
+            amx_core::coverage::AttachmentState::NotDownloaded { .. }
+        ));
     }
 
     /// A raw, non-UTF-8 byte inside the `Date:` header must never panic mail-parser or this
