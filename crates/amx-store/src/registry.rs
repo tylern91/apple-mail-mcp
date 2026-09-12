@@ -81,6 +81,12 @@ impl MailboxRegistry {
         self.by_normalized_url.is_empty()
     }
 
+    /// Every mailbox the registry holds, in no particular order — used by callers (e.g. task 10's
+    /// sync orchestration) that need to look a mailbox up by `rowid` rather than by URL.
+    pub fn iter(&self) -> impl Iterator<Item = &Mailbox> {
+        self.by_normalized_url.values()
+    }
+
     /// Mailboxes whose URL host segment is `account_identifier` — the account UUID that also
     /// names its `~/Library/Mail/V10/<UUID>` directory.
     pub fn mailboxes_for_account<'a>(

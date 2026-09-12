@@ -31,6 +31,13 @@ impl MailboxPathResolver {
         let generation = find_generation_dir(&mbox_dir, mailbox_url)?;
         Ok(mbox_dir.join(generation))
     }
+
+    /// The account UUID segment of `mailbox_url` — the same identifier that names both the
+    /// mailbox's `~/Library/Mail/V10/<UUID>` directory and its `Accounts4.sqlite` row
+    /// (`amx_store::account::AccountResolver::resolve`).
+    pub fn account_identifier(mailbox_url: &str) -> Result<String, AmxError> {
+        split_url(mailbox_url).map(|(account, _)| account)
+    }
 }
 
 /// Splits `scheme://account/seg1/seg2` into `(account, [seg1, seg2])`, percent-decoding and
@@ -149,6 +156,17 @@ mod tests {
         let nfc_url = "imap://AB4FC904-21FE-4AC0-A089-716246CE5C46/%5BGmail%5D/T\u{1EA5}t c\u{1EA3} th\u{01B0}";
         let resolved = MailboxPathResolver::resolve(store_root.path(), nfc_url).unwrap();
         assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn account_identifier_extracts_the_url_host_segment() {
+        assert_eq!(
+            MailboxPathResolver::account_identifier(
+                "imap://AB4FC904-21FE-4AC0-A089-716246CE5C46/INBOX"
+            )
+            .unwrap(),
+            "AB4FC904-21FE-4AC0-A089-716246CE5C46"
+        );
     }
 
     #[test]

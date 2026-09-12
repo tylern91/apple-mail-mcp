@@ -46,7 +46,10 @@ pub fn run_batch(conn: &Connection, batch: &[BatchItem]) -> Result<Vec<BatchOutc
     Ok(outcomes)
 }
 
-fn record(
+/// `pub(crate)` rather than private: task 10's sync orchestration (`sync.rs`) classifies bodies
+/// itself via `AvailabilityClassifier` (not `run_batch`) but still needs to record the same
+/// `quarantine` row when that classification comes back `Quarantined`.
+pub(crate) fn record(
     conn: &Connection,
     rowid: i64,
     path: &Path,

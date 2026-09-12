@@ -17,9 +17,12 @@ path = "src/main.rs"
 
 [dependencies]
 amx-core = { path = "../amx-core" }
+amx-index = { path = "../amx-index" }
 amx-mcp = { path = "../amx-mcp" }
 amx-parse = { path = "../amx-parse" }
 amx-store = { path = "../amx-store" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
