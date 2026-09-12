@@ -1,4 +1,5 @@
 pub mod classify;
+pub mod coverage;
 pub mod fetch;
 pub mod meta;
 pub mod planner;

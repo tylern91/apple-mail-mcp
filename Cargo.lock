@@ -82,6 +82,8 @@ dependencies = [
  "amx-store",
  "notify",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tantivy",
  "tempfile",
 ]
