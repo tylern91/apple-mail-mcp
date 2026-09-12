@@ -140,9 +140,10 @@ if [ -n "$prev" ] && [ -n "$REPO_SLUG" ] \
 \`\`\`sh
 # macOS (Apple Silicon)
 curl -fLO https://github.com/${REPO_SLUG}/releases/download/${version}/${darwin_asset}
-shasum -a 256 -c <(echo "${darwin_sha}  ${darwin_asset}")
+curl -fLO https://github.com/${REPO_SLUG}/releases/download/${version}/${darwin_asset}.sha256
+shasum -a 256 -c ${darwin_asset}.sha256
 tar -xf ${darwin_asset}
-install -m 0755 ${darwin_asset%.tar.gz}/amxcli ~/.local/bin/amxcli
+install -m 0755 amxcli ~/.local/bin/amxcli
 
 # Homebrew
 brew tap ${REPO_SLUG} && brew install amxcli
