@@ -54,7 +54,9 @@ fn render_parsed(base: GetMessageResponse, parsed: &Option<ParsedMessage>) -> Ge
     }
 }
 
-fn format_address(address: &EmlxAddress) -> String {
+/// `pub(crate)` — also reused by `recent_messages` (task 6), which renders the same
+/// `EmlxAddress` shape into a summary line.
+pub(crate) fn format_address(address: &EmlxAddress) -> String {
     match &address.name {
         Some(name) if !name.is_empty() => format!("{name} <{}>", address.email),
         _ => address.email.clone(),

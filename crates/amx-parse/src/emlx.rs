@@ -66,6 +66,8 @@ pub struct ParsedMessage {
     pub to: Vec<EmlxAddress>,
     pub date: Option<i64>,
     pub message_id: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub references: Vec<String>,
     pub body_text: Option<String>,
     pub body_html: Option<String>,
     pub footer: EmlxFooter,
@@ -114,6 +116,16 @@ pub fn parse_emlx(path: &Path, bytes: &[u8]) -> Result<ParsedMessage, ParseError
         to: collect_addresses(message.to()),
         date: message.date().map(|dt| dt.to_timestamp()),
         message_id: message.message_id().map(str::to_string),
+        in_reply_to: message
+            .in_reply_to()
+            .as_text_list()
+            .and_then(|ids| ids.first())
+            .map(|id| id.to_string()),
+        references: message
+            .references()
+            .as_text_list()
+            .map(|ids| ids.iter().map(|id| id.to_string()).collect())
+            .unwrap_or_default(),
         body_text: message.body_text(0).map(|s| s.into_owned()),
         body_html: message.body_html(0).map(|s| s.into_owned()),
         footer,

@@ -186,6 +186,8 @@ mod tests {
             to: Vec::new(),
             date: None,
             message_id: None,
+            in_reply_to: None,
+            references: Vec::new(),
             body_text: None,
             body_html: None,
             footer: Default::default(),

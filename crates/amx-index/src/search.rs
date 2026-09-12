@@ -58,9 +58,43 @@ pub struct SearchResponse {
     pub coverage: CoverageEnvelope,
 }
 
+/// A thread has no realistic message count anywhere near this, so one page covers every real
+/// case; `get_thread` (`amx-mcp` task 6) needs no pagination on top of it.
+const THREAD_HIT_LIMIT: usize = 10_000;
+
 pub struct Search;
 
 impl Search {
+    /// Every document whose `thread_id` field equals `thread_id`, oldest first. `thread_id` only
+    /// exists in the Tantivy index (populated from the parsed `.emlx` footer's `conversation-id`
+    /// in `sync.rs`'s `build_document`) — the SQLite envelope index carries no such column, so
+    /// this is the only way to resolve a thread's members.
+    pub fn by_thread(
+        searcher: &Searcher,
+        fields: &Fields,
+        thread_id: i64,
+    ) -> Result<Vec<SearchHit>, AmxError> {
+        let query = TermQuery::new(
+            Term::from_field_i64(fields.thread_id, thread_id),
+            IndexRecordOption::Basic,
+        );
+
+        let top_docs = searcher.search(
+            &query,
+            &TopDocs::with_limit(THREAD_HIT_LIMIT).order_by_score(),
+        )?;
+        let mut hits = top_docs
+            .into_iter()
+            .map(|(score, address)| {
+                let doc: TantivyDocument = searcher.doc(address)?;
+                Ok(Self::to_hit(fields, score, &doc))
+            })
+            .collect::<Result<Vec<_>, AmxError>>()?;
+
+        hits.sort_by_key(|hit| hit.date_sent);
+        Ok(hits)
+    }
+
     /// Runs `request` against `searcher`, reading hits and the coverage envelope off the same
     /// query in one `MultiCollector` pass (umbrella §4.2.4).
     pub fn run(
@@ -261,6 +295,82 @@ mod tests {
 
         writer.commit().unwrap();
         (index, fields)
+    }
+
+    /// Two documents sharing `thread_id` 42 (a reply pair, oldest first) plus one unrelated
+    /// document with a different thread — for [`Search::by_thread`].
+    fn threaded_index() -> (tantivy::Index, Fields) {
+        let (schema, fields) = build_schema();
+        let index = tantivy::Index::create(RamDirectory::create(), schema, Default::default())
+            .expect("in-memory index");
+        register_tokenizers(&index);
+
+        let mut writer = index.writer(15_000_000).expect("writer");
+        writer
+            .add_document(doc!(
+                fields.rowid => 1i64,
+                fields.account_id => "acct-a",
+                fields.mailbox_key => "inbox",
+                fields.subject => "original",
+                fields.sender => "Alice <alice@example.com>",
+                fields.body => "start of thread",
+                fields.date_sent => DateTime::from_timestamp_secs(1_700_000_000),
+                fields.thread_id => 42i64,
+                fields.body_state => 0u64,
+                fields.attachment_state => 0u64,
+            ))
+            .unwrap();
+        writer
+            .add_document(doc!(
+                fields.rowid => 2i64,
+                fields.account_id => "acct-a",
+                fields.mailbox_key => "inbox",
+                fields.subject => "re: original",
+                fields.sender => "Bob <bob@example.com>",
+                fields.body => "reply",
+                fields.date_sent => DateTime::from_timestamp_secs(1_700_100_000),
+                fields.thread_id => 42i64,
+                fields.body_state => 0u64,
+                fields.attachment_state => 0u64,
+            ))
+            .unwrap();
+        writer
+            .add_document(doc!(
+                fields.rowid => 3i64,
+                fields.account_id => "acct-a",
+                fields.mailbox_key => "inbox",
+                fields.subject => "unrelated",
+                fields.sender => "Carol <carol@example.com>",
+                fields.body => "different thread",
+                fields.date_sent => DateTime::from_timestamp_secs(1_700_200_000),
+                fields.thread_id => 99i64,
+                fields.body_state => 0u64,
+                fields.attachment_state => 0u64,
+            ))
+            .unwrap();
+
+        writer.commit().unwrap();
+        (index, fields)
+    }
+
+    #[test]
+    fn by_thread_returns_only_matching_documents_oldest_first() {
+        let (index, fields) = threaded_index();
+        let searcher = index.reader().unwrap().searcher();
+
+        let hits = Search::by_thread(&searcher, &fields, 42).unwrap();
+
+        assert_eq!(hits.iter().map(|h| h.rowid).collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    fn by_thread_with_no_matches_is_an_empty_vec() {
+        let (index, fields) = threaded_index();
+        let searcher = index.reader().unwrap().searcher();
+
+        let hits = Search::by_thread(&searcher, &fields, 12345).unwrap();
+
+        assert!(hits.is_empty());
     }
 
     #[test]
