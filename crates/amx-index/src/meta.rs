@@ -14,6 +14,14 @@ CREATE TABLE IF NOT EXISTS writer_lock (
     process TEXT NOT NULL,
     since INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS quarantine (
+    message_rowid INTEGER PRIMARY KEY,
+    path TEXT NOT NULL,
+    error_kind TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1
+);
 "#;
 
 /// Opens (creating if absent) the meta database at `path` and ensures its schema exists.
