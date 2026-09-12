@@ -1,0 +1,6 @@
+# Proves the shard scheme composes correctly under a real nested account/mailbox directory —
+# not just a bare store root. mailbox_dir is a real path shape from the live store:
+# <StoreRoot>/Mail/V10/<AccountUUID>/INBOX.mbox/<GenerationUUID>
+mailbox_dir|/Users/example/Library/Mail/V10/E4081442-6942-47A4-B91C-3D6162CAF23A/INBOX.mbox/F645E2FB-05D2-4A20-86B7-33FB1C8BFD18
+133|false|Data/Messages/133.emlx
+662|true|Data/Messages/662.partial.emlx

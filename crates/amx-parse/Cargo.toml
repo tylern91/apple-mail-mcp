@@ -13,3 +13,11 @@ workspace = true
 
 [dependencies]
 amx-core = { path = "../amx-core" }
+mail-parser = "0.11"
+plist = "1"
+serde = { version = "1", features = ["derive"] }
+html5ever = "0.39"
+markup5ever_rcdom = "0.39"
+lopdf = "0.42"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.41"

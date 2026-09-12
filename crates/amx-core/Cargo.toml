@@ -11,4 +11,16 @@ repository = "https://github.com/tylern91/apple-mail-mcp"
 [lints]
 workspace = true
 
+[features]
+default = []
+sqlite = ["dep:rusqlite"]
+tantivy = ["dep:tantivy"]
+
 [dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+unicode-normalization = "0.1"
+percent-encoding = "2"
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+tantivy = { version = "0.26", optional = true }

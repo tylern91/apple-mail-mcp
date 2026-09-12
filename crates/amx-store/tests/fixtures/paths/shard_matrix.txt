@@ -1,0 +1,9 @@
+# rowid|partial|expected_relative_path (relative to a mailbox's own Data-containing directory)
+# Verified against the live store: floor(rowid/1000) reversed digit-by-digit, one directory per
+# digit; floor == 0 means no shard directories at all.
+172|false|Data/Messages/172.emlx
+40708|false|Data/0/4/Messages/40708.emlx
+41910|false|Data/1/4/Messages/41910.emlx
+42260|false|Data/2/4/Messages/42260.emlx
+239389|false|Data/9/3/2/Messages/239389.emlx
+740|true|Data/Messages/740.partial.emlx

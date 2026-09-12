@@ -18,3 +18,8 @@ path = "src/main.rs"
 [dependencies]
 amx-core = { path = "../amx-core" }
 amx-mcp = { path = "../amx-mcp" }
+amx-parse = { path = "../amx-parse" }
+amx-store = { path = "../amx-store" }
+
+[dev-dependencies]
+tempfile = "3"
