@@ -1,0 +1,39 @@
+# Homebrew formula template for amxcli.
+#
+# This file lives in the apple-mail-mcp source repo at
+# packaging/homebrew/amxcli.rb.template. scripts/update-homebrew-formula.sh
+# renders it (substituting the AMXCLI_* placeholders below) into
+# packaging/homebrew/amxcli.rb, then pushes that rendered copy to the
+# Homebrew tap (github.com/tylern91/homebrew-apple-mail-mcp) on each
+# release. Never edit packaging/homebrew/amxcli.rb directly — it's a
+# generated file, not the template.
+#
+# macOS only: amxcli reads Mail.app's on-disk store and drives it via
+# AppleScript/Automation, so unlike rqmd's cross-platform formula there
+# is no on_linux stanza here.
+#
+# Install:
+#   brew tap tylern91/apple-mail-mcp
+#   brew install amxcli
+class Amxcli < Formula
+  desc "MCP server exposing Apple Mail read/search/send tools to LLM clients"
+  homepage "https://github.com/tylern91/apple-mail-mcp"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      # aarch64-apple-darwin (macOS, Apple Silicon)
+      url "https://github.com/tylern91/apple-mail-mcp/releases/download/AMXCLI_VERSION/amx-cli-AMXCLI_VERSION-macos-arm64.tar.gz"
+      sha256 "AMXCLI_SHA256_MACOS_ARM64"
+      version "AMXCLI_BARE_VERSION"
+    end
+  end
+
+  def install
+    bin.install "amxcli"
+  end
+
+  test do
+    system "#{bin}/amxcli", "--version"
+  end
+end
