@@ -66,6 +66,13 @@ impl MailboxRegistry {
         self.by_normalized_url.get(&normalize(url))
     }
 
+    /// The same percent-decode -> NFC -> casefold pipeline [`Self::resolve`] uses internally —
+    /// exposed so callers that key their own data on mailbox identity (e.g. the index schema's
+    /// `mailbox_key` field) normalize identically rather than reimplementing the pipeline.
+    pub fn normalize_url(url: &str) -> String {
+        normalize(url)
+    }
+
     pub fn len(&self) -> usize {
         self.by_normalized_url.len()
     }

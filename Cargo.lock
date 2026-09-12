@@ -78,6 +78,10 @@ name = "amx-index"
 version = "0.2.0"
 dependencies = [
  "amx-core",
+ "amx-parse",
+ "amx-store",
+ "tantivy",
+ "tempfile",
 ]
 
 [[package]]
