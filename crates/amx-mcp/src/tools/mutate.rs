@@ -71,10 +71,32 @@ pub fn resolve_and_address(
     })
 }
 
+/// Resolves `rowid` and stages its re-indexed document on an already-open `writer`, without
+/// committing. Split out from [`reindex`] so `triage_apply` (Phase 4 task 7) can stage many
+/// items through one [`MutationWriter`] and commit once for the whole batch (D3), while the
+/// single-item mutate tools still get one writer-per-call via `reindex` below.
+pub(crate) fn reindex_with_writer(
+    writer: &mut MutationWriter,
+    conn: &RoConnection,
+    registry: &MailboxRegistry,
+    store_root: &Path,
+    account_resolver: &AccountResolver,
+    rowid: i64,
+) -> Result<ResolvedMessage, AmxError> {
+    let updated = resolve_message(conn, registry, store_root, account_resolver, rowid)?;
+    writer.upsert(
+        rowid,
+        &updated.account_id,
+        &updated.mailbox_url,
+        &updated.classified,
+    )?;
+    Ok(updated)
+}
+
 /// Resolves `rowid`, re-indexes it from its current on-disk state, and commits — shared by every
-/// mutate tool's post-mutation step so `search_messages` never sees a stale document (imdinu #66).
-/// The caller must reload its `IndexReaderPool` after this returns (D3 leaves that one step to
-/// the caller, since the pool is `AppState`'s, not this module's).
+/// single-item mutate tool's post-mutation step so `search_messages` never sees a stale document
+/// (imdinu #66). The caller must reload its `IndexReaderPool` after this returns (D3 leaves that
+/// one step to the caller, since the pool is `AppState`'s, not this module's).
 #[allow(clippy::too_many_arguments)]
 fn reindex(
     conn: &RoConnection,
@@ -85,13 +107,14 @@ fn reindex(
     meta_path: &Path,
     rowid: i64,
 ) -> Result<ResolvedMessage, AmxError> {
-    let updated = resolve_message(conn, registry, store_root, account_resolver, rowid)?;
     let mut writer = MutationWriter::open(index_dir, meta_path)?;
-    writer.upsert(
+    let updated = reindex_with_writer(
+        &mut writer,
+        conn,
+        registry,
+        store_root,
+        account_resolver,
         rowid,
-        &updated.account_id,
-        &updated.mailbox_url,
-        &updated.classified,
     )?;
     writer.commit()?;
     Ok(updated)
@@ -296,9 +319,42 @@ fn wait_for_relocated_rowid(
 }
 
 /// Called after a `move`/`trash` JXA mutation has succeeded: figures out the message's rowid now
-/// (unchanged, or newly-created per the account rowid diff), re-indexes it, removes the stale
-/// document for `old_rowid` if it moved to a new one, and commits — all through a single
-/// [`MutationWriter`] acquisition (D3).
+/// (unchanged, or newly-created per the account rowid diff), stages its re-indexed document on an
+/// already-open `writer` (removing the stale document for `old_rowid` if it moved to a new one),
+/// without committing. Split out from [`finish_relocate`] for the same reason as
+/// [`reindex_with_writer`] — `triage_apply` batches many relocations through one writer and one
+/// commit (D3).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finish_relocate_with_writer(
+    writer: &mut MutationWriter,
+    conn: &RoConnection,
+    registry: &MailboxRegistry,
+    store_root: &Path,
+    account_resolver: &AccountResolver,
+    old_rowid: i64,
+    snapshot_account_id: &str,
+    before: &HashSet<i64>,
+) -> Result<(i64, String), AmxError> {
+    let final_rowid =
+        wait_for_relocated_rowid(conn, registry, old_rowid, snapshot_account_id, before)?;
+
+    let updated = resolve_message(conn, registry, store_root, account_resolver, final_rowid)?;
+
+    if final_rowid != old_rowid {
+        writer.remove(old_rowid);
+    }
+    writer.upsert(
+        final_rowid,
+        &updated.account_id,
+        &updated.mailbox_url,
+        &updated.classified,
+    )?;
+
+    Ok((final_rowid, updated.mailbox_url))
+}
+
+/// Called after a `move`/`trash` JXA mutation has succeeded, for the single-item mutate tools:
+/// opens one [`MutationWriter`], stages the relocation, and commits (D3).
 #[allow(clippy::too_many_arguments)]
 fn finish_relocate(
     conn: &RoConnection,
@@ -311,24 +367,19 @@ fn finish_relocate(
     snapshot_account_id: &str,
     before: &HashSet<i64>,
 ) -> Result<(i64, String), AmxError> {
-    let final_rowid =
-        wait_for_relocated_rowid(conn, registry, old_rowid, snapshot_account_id, before)?;
-
-    let updated = resolve_message(conn, registry, store_root, account_resolver, final_rowid)?;
-
     let mut writer = MutationWriter::open(index_dir, meta_path)?;
-    if final_rowid != old_rowid {
-        writer.remove(old_rowid);
-    }
-    writer.upsert(
-        final_rowid,
-        &updated.account_id,
-        &updated.mailbox_url,
-        &updated.classified,
+    let result = finish_relocate_with_writer(
+        &mut writer,
+        conn,
+        registry,
+        store_root,
+        account_resolver,
+        old_rowid,
+        snapshot_account_id,
+        before,
     )?;
     writer.commit()?;
-
-    Ok((final_rowid, updated.mailbox_url))
+    Ok(result)
 }
 
 /// Called after the JXA `move` mutation has been issued.

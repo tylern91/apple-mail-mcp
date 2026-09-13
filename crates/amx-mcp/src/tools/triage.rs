@@ -9,7 +9,7 @@ use amx_core::AmxError;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
-use crate::schema::tools::{TriagePlanRequest, TriagePlanResponse};
+use crate::schema::tools::{TriageOperation, TriagePlanRequest, TriagePlanResponse};
 
 /// Computes the plan's content-addressed hash over its rowids and operation, then persists it in
 /// `meta.sqlite` so `triage_apply` can look it up on a separate connection.
@@ -46,10 +46,28 @@ pub fn run_triage_plan(
     })
 }
 
+/// Loads a frozen plan by its content hash and deserializes it back into `triage_apply`'s
+/// working types. An unknown hash (never frozen, or mistyped) fails closed rather than applying
+/// a guessed-at operation to a caller-supplied rowid list.
+pub fn load_plan(
+    meta_conn: &Connection,
+    plan_hash: &str,
+) -> Result<(Vec<i64>, TriageOperation), AmxError> {
+    let (rowids_json, operation_json) = amx_index::meta::load_triage_plan(meta_conn, plan_hash)?
+        .ok_or_else(|| AmxError::TriagePlanNotFound {
+            hash: plan_hash.to_string(),
+        })?;
+
+    let rowids: Vec<i64> = serde_json::from_str(&rowids_json)
+        .expect("rowids_json was produced by run_triage_plan's own serialization");
+    let operation: TriageOperation = serde_json::from_str(&operation_json)
+        .expect("operation_json was produced by run_triage_plan's own serialization");
+    Ok((rowids, operation))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::tools::TriageOperation;
 
     /// Keeps the backing tempfile alive alongside the `Connection` — dropping it deletes the
     /// file out from under an open connection, which surfaces as a spurious "readonly database"
@@ -137,5 +155,29 @@ mod tests {
                 .expect("plan was just saved");
         assert_eq!(rowids_json, "[42,43]");
         assert!(operation_json.contains("AMX-TEST-DEST"));
+    }
+
+    #[test]
+    fn load_plan_round_trips_the_frozen_types() {
+        let (_file, conn) = meta_conn();
+        let response = run_triage_plan(
+            &conn,
+            TriagePlanRequest {
+                rowids: vec![7, 8, 9],
+                operation: TriageOperation::SetReadState { read: false },
+            },
+        )
+        .unwrap();
+
+        let (rowids, operation) = load_plan(&conn, &response.plan_hash).unwrap();
+        assert_eq!(rowids, vec![7, 8, 9]);
+        assert_eq!(operation, TriageOperation::SetReadState { read: false });
+    }
+
+    #[test]
+    fn load_plan_rejects_an_unknown_hash() {
+        let (_file, conn) = meta_conn();
+        let err = load_plan(&conn, "not-a-real-hash").unwrap_err();
+        assert!(matches!(err, AmxError::TriagePlanNotFound { .. }));
     }
 }

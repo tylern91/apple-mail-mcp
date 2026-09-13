@@ -311,6 +311,34 @@ pub struct TriagePlanResponse {
     pub operation: TriageOperation,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TriageApplyRequest {
+    pub plan_hash: String,
+    /// Rowids to drop from the frozen plan without applying the operation to them (parasxos #4).
+    #[serde(default)]
+    pub exclude: Vec<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TriageItemOutcome {
+    Success,
+    Skipped { reason: String },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriageItemResult {
+    pub rowid: i64,
+    pub outcome: TriageItemOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriageApplyResponse {
+    pub plan_hash: String,
+    pub results: Vec<TriageItemResult>,
+}
+
 // ---- doctor / status (tasks 7-8) ----
 //
 // These two diagnostics already report health/coverage as their own subject matter, so unlike
@@ -395,6 +423,8 @@ mod tests {
         assert_schema!(TrashMessagesResponse);
         assert_schema!(TriagePlanRequest);
         assert_schema!(TriagePlanResponse);
+        assert_schema!(TriageApplyRequest);
+        assert_schema!(TriageApplyResponse);
         assert_schema!(DoctorRequest);
         assert_schema!(DoctorResponse);
         assert_schema!(StatusRequest);

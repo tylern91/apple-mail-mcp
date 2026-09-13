@@ -18,4 +18,4 @@ pub use get_message::run_get_message;
 pub use pipeline::{ResolvedMessage, resolve_message};
 pub use search_messages::run_search;
 pub use thread::{run_get_message_links, run_get_thread};
-pub use triage::run_triage_plan;
+pub use triage::{load_plan, run_triage_plan};

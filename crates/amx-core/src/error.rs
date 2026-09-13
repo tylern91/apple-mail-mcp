@@ -173,6 +173,9 @@ pub enum AmxError {
         observed: String,
     },
 
+    #[error("triage plan {hash} is unknown (never frozen, or the hash was mistyped)")]
+    TriagePlanNotFound { hash: String },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 
