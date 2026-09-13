@@ -17,11 +17,18 @@ function run(argv) {
 
 function findMailbox(address) {
   const mail = Application("Mail");
-  const accounts = mail.accounts.whose({ name: address.account_name })();
-  if (accounts.length === 0) {
-    throw new Error("no account named " + address.account_name);
+  // "On My Mac" local mailboxes are not under any account object in Mail's JXA model — they
+  // live directly on the top-level Mail.mailboxes collection.
+  let container;
+  if (address.account_name === "On My Mac") {
+    container = mail;
+  } else {
+    const accounts = mail.accounts.whose({ name: address.account_name })();
+    if (accounts.length === 0) {
+      throw new Error("no account named " + address.account_name);
+    }
+    container = accounts[0];
   }
-  let container = accounts[0];
   for (const segment of address.mailbox_segments) {
     const matches = container.mailboxes.whose({ name: segment })();
     if (matches.length === 0) {
