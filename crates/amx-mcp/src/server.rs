@@ -444,14 +444,11 @@ impl ServerHandler for AmxServer {
             .filter(|tool| visible_names.contains(tool.name.as_ref()))
             .collect();
 
-        Ok(ListToolsResult {
-            result_type: None,
-            tools,
-            meta: None,
-            next_cursor: None,
-            ttl_ms: None,
-            cache_scope: None,
-        })
+        // The catalog is fixed for this process's lifetime (it only varies by `read_only` at
+        // startup), so it's safe to advertise as publicly cacheable for a while.
+        Ok(ListToolsResult::with_all_items(tools)
+            .with_ttl_ms(60_000)
+            .with_cache_scope(rmcp::model::CacheScope::Public))
     }
 }
 
