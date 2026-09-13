@@ -251,6 +251,37 @@ pub struct SetFlagResponse {
     pub flagged: bool,
 }
 
+// ---- move_messages / trash_messages (Phase 4 task 4) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MoveMessagesRequest {
+    pub rowid: i64,
+    pub destination_mailbox: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MoveMessagesResponse {
+    pub rowid: i64,
+    /// The rowid the message now has — Apple Mail does not always preserve `ROWID` across a
+    /// move, so this may differ from the request's `rowid`. Callers must re-address the message
+    /// by this value, not the original.
+    pub new_rowid: i64,
+    pub mailbox: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrashMessagesRequest {
+    pub rowid: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrashMessagesResponse {
+    pub rowid: i64,
+    /// See [`MoveMessagesResponse::new_rowid`].
+    pub new_rowid: i64,
+    pub mailbox: String,
+}
+
 // ---- doctor / status (tasks 7-8) ----
 //
 // These two diagnostics already report health/coverage as their own subject matter, so unlike
@@ -329,6 +360,10 @@ mod tests {
         assert_schema!(SetReadStateResponse);
         assert_schema!(SetFlagRequest);
         assert_schema!(SetFlagResponse);
+        assert_schema!(MoveMessagesRequest);
+        assert_schema!(MoveMessagesResponse);
+        assert_schema!(TrashMessagesRequest);
+        assert_schema!(TrashMessagesResponse);
         assert_schema!(DoctorRequest);
         assert_schema!(DoctorResponse);
         assert_schema!(StatusRequest);

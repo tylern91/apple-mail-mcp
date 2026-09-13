@@ -120,6 +120,16 @@ const MUTATE_CATALOG: &[ToolDescriptor] = &[
         lane: ToolLane::Mutate,
         read_only_hint: false,
     },
+    ToolDescriptor {
+        name: "move_messages",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "trash_messages",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
 ];
 
 /// The full tool catalog for this platform build.
@@ -561,6 +571,159 @@ impl AmxServer {
                 &self.state.meta_path,
                 rowid,
                 flagged,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "move_messages",
+        description = "Move a message to another mailbox in Mail.app, keeping the search index in sync.",
+        annotations(read_only_hint = false)
+    )]
+    pub async fn move_messages(
+        &self,
+        params: Parameters<MoveMessagesRequest>,
+    ) -> Result<Json<Envelope<MoveMessagesResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+        let destination_mailbox = params.0.destination_mailbox;
+
+        let (addressed, destination, snapshot_account_id, before) = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            let (destination, snapshot_account_id) = tools::mutate::resolve_destination(
+                &self.state.mailbox_registry,
+                &resolver,
+                &destination_mailbox,
+            )
+            .map_err(to_error_data)?;
+            let prep = tools::mutate::prepare_relocate(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+                Some(&snapshot_account_id),
+            )
+            .map_err(to_error_data)?;
+            (
+                prep.addressed,
+                destination,
+                prep.snapshot_account_id,
+                prep.before,
+            )
+        };
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::Move {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+            destination,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_move(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                &snapshot_account_id,
+                &before,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "trash_messages",
+        description = "Move a message to Mail.app's Trash mailbox, keeping the search index in sync. Never permanently erases.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    pub async fn trash_messages(
+        &self,
+        params: Parameters<TrashMessagesRequest>,
+    ) -> Result<Json<Envelope<TrashMessagesResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+
+        let (addressed, snapshot_account_id, before) = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            let prep = tools::mutate::prepare_relocate(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+                None,
+            )
+            .map_err(to_error_data)?;
+            (prep.addressed, prep.snapshot_account_id, prep.before)
+        };
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::Trash {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_trash(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                &snapshot_account_id,
+                &before,
             )
         }
         .map_err(to_error_data)?;
