@@ -1121,4 +1121,54 @@ mod tests {
         }
         assert_eq!(registered.len(), catalog.len());
     }
+
+    /// Phase 4 task 9: every mutate-lane tool (the 6 registered under `ToolLane::Mutate`,
+    /// `triage_apply` included) must vanish from `tools/list` under `AMX_READ_ONLY=1`, while every
+    /// read/diagnostic tool stays visible. Exercises the real `catalog()` this server registers,
+    /// not a synthetic one — `tool_lane.rs`'s own tests already cover `visible_tools`'s filtering
+    /// logic in isolation, so this test only needs to confirm this catalog is wired to it correctly.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn read_only_hides_every_mutate_tool_from_the_real_catalog() {
+        let catalog = catalog();
+        let mutate_names: std::collections::HashSet<_> = catalog
+            .iter()
+            .filter(|d| matches!(d.lane, ToolLane::Mutate))
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(
+            mutate_names,
+            std::collections::HashSet::from([
+                "set_read_state",
+                "set_flag",
+                "move_messages",
+                "trash_messages",
+                "triage_plan",
+                "triage_apply",
+            ])
+        );
+
+        let visible_when_read_only: std::collections::HashSet<_> = visible_tools(&catalog, true)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        for name in &mutate_names {
+            assert!(
+                !visible_when_read_only.contains(name),
+                "{name} must not be visible under AMX_READ_ONLY"
+            );
+        }
+
+        let visible_normally: std::collections::HashSet<_> = visible_tools(&catalog, false)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        for name in &mutate_names {
+            assert!(
+                visible_normally.contains(name),
+                "{name} must be visible when read-only is off"
+            );
+        }
+        assert_eq!(visible_normally.len(), catalog.len());
+    }
 }
