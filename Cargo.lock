@@ -40,6 +40,10 @@ version = "0.3.0"
 dependencies = [
  "amx-core",
  "amx-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

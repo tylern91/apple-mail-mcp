@@ -155,6 +155,24 @@ pub enum AmxError {
     #[error("search query {query:?} could not be parsed: {reason}")]
     SearchQueryInvalid { query: String, reason: String },
 
+    #[error("automation script for {op} failed: {stderr}")]
+    JxaFailed { op: String, stderr: String },
+
+    #[error("automation script for {op} timed out")]
+    JxaTimeout { op: String },
+
+    #[error("message {rowid} is not addressable in Mail.app: {reason}")]
+    MessageNotAddressable { rowid: i64, reason: String },
+
+    #[error(
+        "mutation on message {rowid} could not be verified: expected {expected}, observed {observed}"
+    )]
+    MutationVerificationFailed {
+        rowid: i64,
+        expected: String,
+        observed: String,
+    },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 
