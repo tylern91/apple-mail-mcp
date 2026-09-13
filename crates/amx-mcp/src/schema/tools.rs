@@ -282,6 +282,35 @@ pub struct TrashMessagesResponse {
     pub mailbox: String,
 }
 
+// ---- triage_plan (Phase 4 task 6) / triage_apply (Phase 4 task 7) ----
+
+/// The operation a triage plan will apply to every item once `triage_apply` runs it. Kept as a
+/// closed set (not a free-form JXA request) so a frozen plan's hash is meaningful — hashing an
+/// arbitrary operation payload would let two semantically-identical plans hash differently.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TriageOperation {
+    SetReadState { read: bool },
+    SetFlag { flagged: bool },
+    Move { destination_mailbox: String },
+    Trash,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriagePlanRequest {
+    /// The ordered rowids the plan covers. Order is part of the frozen, hashed content.
+    pub rowids: Vec<i64>,
+    pub operation: TriageOperation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriagePlanResponse {
+    /// SHA-256 (hex) over the plan's rowids and operation. Pass this to `triage_apply`.
+    pub plan_hash: String,
+    pub rowids: Vec<i64>,
+    pub operation: TriageOperation,
+}
+
 // ---- doctor / status (tasks 7-8) ----
 //
 // These two diagnostics already report health/coverage as their own subject matter, so unlike
@@ -364,6 +393,8 @@ mod tests {
         assert_schema!(MoveMessagesResponse);
         assert_schema!(TrashMessagesRequest);
         assert_schema!(TrashMessagesResponse);
+        assert_schema!(TriagePlanRequest);
+        assert_schema!(TriagePlanResponse);
         assert_schema!(DoctorRequest);
         assert_schema!(DoctorResponse);
         assert_schema!(StatusRequest);

@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS health_transitions (
     responsible_process TEXT,
     since INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS triage_plans (
+    hash TEXT PRIMARY KEY,
+    rowids_json TEXT NOT NULL,
+    operation_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 "#;
 
 /// Opens (creating if absent) the meta database at `path` and ensures its schema exists.
@@ -138,6 +145,40 @@ pub fn last_health_transition(
          ORDER BY id DESC LIMIT 1",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .optional()
+    .map_err(AmxError::from)
+}
+
+/// Persists a `triage_plan` (Phase 4 task 6) so `triage_apply` (task 7) can later look it up by
+/// hash on a separate connection. `hash` is content-addressed by the caller, so a re-`INSERT` of
+/// the same hash is always the same content — `DO NOTHING` keeps this idempotent.
+pub fn save_triage_plan(
+    conn: &Connection,
+    hash: &str,
+    rowids_json: &str,
+    operation_json: &str,
+    created_at: i64,
+) -> Result<(), AmxError> {
+    conn.execute(
+        "INSERT INTO triage_plans (hash, rowids_json, operation_json, created_at) \
+         VALUES (?1, ?2, ?3, ?4) ON CONFLICT(hash) DO NOTHING",
+        params![hash, rowids_json, operation_json, created_at],
+    )?;
+    Ok(())
+}
+
+/// Loads a previously frozen plan's `(rowids_json, operation_json)` by its content hash, or
+/// `None` if `hash` is unknown (including a hash mutated after the fact — it simply won't match
+/// any row).
+pub fn load_triage_plan(
+    conn: &Connection,
+    hash: &str,
+) -> Result<Option<(String, String)>, AmxError> {
+    conn.query_row(
+        "SELECT rowids_json, operation_json FROM triage_plans WHERE hash = ?1",
+        params![hash],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
     .map_err(AmxError::from)
@@ -243,6 +284,40 @@ mod tests {
         assert_eq!(
             last_health_transition(&conn).unwrap(),
             Some(("granted".to_string(), None, 200))
+        );
+    }
+
+    #[test]
+    fn a_fresh_database_has_no_triage_plan() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let conn = open(file.path()).unwrap();
+        assert_eq!(load_triage_plan(&conn, "deadbeef").unwrap(), None);
+    }
+
+    #[test]
+    fn a_triage_plan_round_trips_through_save_and_load() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let conn = open(file.path()).unwrap();
+
+        save_triage_plan(&conn, "abc123", "[1,2,3]", "{\"kind\":\"trash\"}", 100).unwrap();
+
+        assert_eq!(
+            load_triage_plan(&conn, "abc123").unwrap(),
+            Some(("[1,2,3]".to_string(), "{\"kind\":\"trash\"}".to_string()))
+        );
+    }
+
+    #[test]
+    fn saving_the_same_hash_twice_is_idempotent() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let conn = open(file.path()).unwrap();
+
+        save_triage_plan(&conn, "abc123", "[1]", "{\"kind\":\"trash\"}", 100).unwrap();
+        save_triage_plan(&conn, "abc123", "[1]", "{\"kind\":\"trash\"}", 200).unwrap();
+
+        assert_eq!(
+            load_triage_plan(&conn, "abc123").unwrap(),
+            Some(("[1]".to_string(), "{\"kind\":\"trash\"}".to_string()))
         );
     }
 }

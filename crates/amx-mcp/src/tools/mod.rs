@@ -8,6 +8,7 @@ pub mod mutate;
 pub mod pipeline;
 pub mod search_messages;
 pub mod thread;
+pub mod triage;
 
 pub use attachments::{run_extract_attachment_text, run_get_attachment, run_list_attachments};
 pub use browse::{run_count_messages, run_recent_messages};
@@ -17,3 +18,4 @@ pub use get_message::run_get_message;
 pub use pipeline::{ResolvedMessage, resolve_message};
 pub use search_messages::run_search;
 pub use thread::{run_get_message_links, run_get_thread};
+pub use triage::run_triage_plan;

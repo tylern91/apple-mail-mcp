@@ -130,6 +130,11 @@ const MUTATE_CATALOG: &[ToolDescriptor] = &[
         lane: ToolLane::Mutate,
         read_only_hint: false,
     },
+    ToolDescriptor {
+        name: "triage_plan",
+        lane: ToolLane::Mutate,
+        read_only_hint: true,
+    },
 ];
 
 /// The full tool catalog for this platform build.
@@ -729,6 +734,21 @@ impl AmxServer {
         .map_err(to_error_data)?;
         self.state.index_pool.reload().map_err(to_error_data)?;
 
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "triage_plan",
+        description = "Freeze an ordered rowid list and an operation into a content-addressed plan for triage_apply. Touches nothing.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn triage_plan(
+        &self,
+        params: Parameters<TriagePlanRequest>,
+    ) -> Result<Json<Envelope<TriagePlanResponse>>, ErrorData> {
+        let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
+        let response = tools::run_triage_plan(&meta_conn, params.0).map_err(to_error_data)?;
         Ok(Json(self.envelope(response)))
     }
 
