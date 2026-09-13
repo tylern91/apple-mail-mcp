@@ -100,6 +100,7 @@ dependencies = [
 name = "amx-mcp"
 version = "0.3.0"
 dependencies = [
+ "amx-automation",
  "amx-core",
  "amx-index",
  "amx-parse",

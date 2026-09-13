@@ -225,6 +225,32 @@ pub struct ListMailboxesResponse {
     pub mailboxes: Vec<MailboxSummary>,
 }
 
+// ---- set_read_state / set_flag (Phase 4 task 3) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetReadStateRequest {
+    pub rowid: i64,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetReadStateResponse {
+    pub rowid: i64,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetFlagRequest {
+    pub rowid: i64,
+    pub flagged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetFlagResponse {
+    pub rowid: i64,
+    pub flagged: bool,
+}
+
 // ---- doctor / status (tasks 7-8) ----
 //
 // These two diagnostics already report health/coverage as their own subject matter, so unlike
@@ -299,6 +325,10 @@ mod tests {
         assert_schema!(ListAccountsResponse);
         assert_schema!(ListMailboxesRequest);
         assert_schema!(ListMailboxesResponse);
+        assert_schema!(SetReadStateRequest);
+        assert_schema!(SetReadStateResponse);
+        assert_schema!(SetFlagRequest);
+        assert_schema!(SetFlagResponse);
         assert_schema!(DoctorRequest);
         assert_schema!(DoctorResponse);
         assert_schema!(StatusRequest);

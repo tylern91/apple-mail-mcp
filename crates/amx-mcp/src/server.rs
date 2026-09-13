@@ -31,9 +31,10 @@ use crate::schema::{Coverage, Envelope, SearchEnvelope};
 use crate::tool_lane::{ToolDescriptor, ToolLane, visible_tools};
 use crate::tools;
 
-/// The 14-tool catalog backing `tools/list`'s `ToolLane` filter. Every tool here is `Read` or
-/// `Diagnostic` — Phase 3 ships no `Mutate`/`Send` surface (sub-plan decision).
-const CATALOG: &[ToolDescriptor] = &[
+/// The read/diagnostic tool catalog backing `tools/list`'s `ToolLane` filter. The mutate lane
+/// (Phase 4) is appended by [`catalog`] only on macOS, where `amx-automation` is buildable — the
+/// Linux portable-CI job builds `amx-mcp` without it (`rust.yml`'s `check-portable` job).
+const READ_CATALOG: &[ToolDescriptor] = &[
     ToolDescriptor {
         name: "search_messages",
         lane: ToolLane::Read,
@@ -106,6 +107,30 @@ const CATALOG: &[ToolDescriptor] = &[
     },
 ];
 
+/// Mutate-lane tools, macOS-only since they call into `amx-automation`.
+#[cfg(target_os = "macos")]
+const MUTATE_CATALOG: &[ToolDescriptor] = &[
+    ToolDescriptor {
+        name: "set_read_state",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "set_flag",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+];
+
+/// The full tool catalog for this platform build.
+fn catalog() -> Vec<ToolDescriptor> {
+    #[allow(unused_mut)]
+    let mut all = READ_CATALOG.to_vec();
+    #[cfg(target_os = "macos")]
+    all.extend_from_slice(MUTATE_CATALOG);
+    all
+}
+
 /// Derives `~/Library/Accounts/Accounts4.sqlite` as a sibling of `store_path`'s grandparent —
 /// the same derivation `amxcli`'s `main.rs` uses; duplicated rather than shared since `amx-mcp`
 /// cannot depend on `amx-cli` (the dependency runs the other way).
@@ -127,6 +152,13 @@ pub struct AppState {
     health: HealthMonitor,
     store_path: PathBuf,
     read_only: bool,
+    /// Raw `<cache_dir>/index` and `<cache_dir>/meta.sqlite` paths — kept alongside `index_pool`
+    /// (which owns a long-lived reader) so a mutate tool can open its own transient
+    /// [`amx_index::mutate::MutationWriter`] without re-deriving `Config`'s path convention.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    index_dir: PathBuf,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    meta_path: PathBuf,
 }
 
 impl AppState {
@@ -170,6 +202,8 @@ impl AppState {
             health,
             store_path,
             read_only: config.read_only,
+            index_dir,
+            meta_path,
         })
     }
 
@@ -397,6 +431,144 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "set_read_state",
+        description = "Mark a message read or unread in Mail.app, keeping the search index in sync.",
+        annotations(read_only_hint = false)
+    )]
+    pub async fn set_read_state(
+        &self,
+        params: Parameters<SetReadStateRequest>,
+    ) -> Result<Json<Envelope<SetReadStateResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+        let read = params.0.read;
+
+        let addressed = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::resolve_and_address(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+            )
+        }
+        .map_err(to_error_data)?;
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::SetReadState {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+            read,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_set_read_state(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                read,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "set_flag",
+        description = "Flag or unflag a message in Mail.app, keeping the search index in sync.",
+        annotations(read_only_hint = false)
+    )]
+    pub async fn set_flag(
+        &self,
+        params: Parameters<SetFlagRequest>,
+    ) -> Result<Json<Envelope<SetFlagResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+        let flagged = params.0.flagged;
+
+        let addressed = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::resolve_and_address(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+            )
+        }
+        .map_err(to_error_data)?;
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::SetFlag {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+            flagged,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_set_flag(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                flagged,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
     #[tool(
         name = "doctor",
         description = "Full readiness screen: access, accounts, mailboxes, coverage, writer/quarantine state."
@@ -432,7 +604,7 @@ impl ServerHandler for AmxServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let visible_names: std::collections::HashSet<&str> =
-            visible_tools(CATALOG, self.state.read_only)
+            visible_tools(&catalog(), self.state.read_only)
                 .into_iter()
                 .map(|descriptor| descriptor.name)
                 .collect();
@@ -461,13 +633,14 @@ mod tests {
         let router = AmxServer::tool_router();
         let registered: std::collections::HashSet<_> =
             router.list_all().into_iter().map(|t| t.name).collect();
-        for descriptor in CATALOG {
+        let catalog = catalog();
+        for descriptor in &catalog {
             assert!(
                 registered.contains(descriptor.name),
                 "catalog entry {:?} has no matching #[tool]",
                 descriptor.name
             );
         }
-        assert_eq!(registered.len(), CATALOG.len());
+        assert_eq!(registered.len(), catalog.len());
     }
 }

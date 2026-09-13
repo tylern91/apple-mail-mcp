@@ -12,6 +12,7 @@ repository = "https://github.com/tylern91/apple-mail-mcp"
 workspace = true
 
 [dependencies]
+amx-automation = { path = "../amx-automation" }
 amx-core = { path = "../amx-core" }
 amx-index = { path = "../amx-index" }
 amx-parse = { path = "../amx-parse" }

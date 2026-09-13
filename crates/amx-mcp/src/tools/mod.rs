@@ -3,6 +3,8 @@ pub mod browse;
 pub mod directory;
 pub mod doctor;
 pub mod get_message;
+#[cfg(target_os = "macos")]
+pub mod mutate;
 pub mod pipeline;
 pub mod search_messages;
 pub mod thread;
