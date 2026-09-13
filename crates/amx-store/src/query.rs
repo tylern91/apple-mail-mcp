@@ -27,6 +27,7 @@ const SUGGESTION_COUNT: usize = 3;
 
 #[derive(Debug, Clone, Default)]
 pub struct MessageQuery {
+    rowid: Option<i64>,
     mailbox_url: Option<String>,
     account_identifier: Option<String>,
     date_sent_from: Option<i64>,
@@ -39,6 +40,14 @@ pub struct MessageQuery {
 impl MessageQuery {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Restricts the query to a single message, e.g. for `get_message`/`list_attachments` — a
+    /// mailbox/account filter set alongside this still applies, so a rowid outside the filtered
+    /// set correctly yields no rows rather than bypassing the filter.
+    pub fn rowid(mut self, rowid: i64) -> Self {
+        self.rowid = Some(rowid);
+        self
     }
 
     pub fn mailbox(mut self, url: impl Into<String>) -> Self {
@@ -82,6 +91,10 @@ impl MessageQuery {
         let mut clauses: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
+        if let Some(rowid) = self.rowid {
+            clauses.push("ROWID = ?".to_string());
+            params.push(Box::new(rowid));
+        }
         if let Some(rowids) = &mailbox_rowids {
             let placeholders = rowids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
             clauses.push(format!("mailbox IN ({placeholders})"));
@@ -227,6 +240,19 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|m| m.mailbox == 1));
+    }
+
+    #[test]
+    fn filters_by_rowid() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let (conn, registry) = store_and_registry(file.path());
+
+        let results = MessageQuery::new()
+            .rowid(11)
+            .execute(&conn, &registry)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].rowid, 11);
     }
 
     #[test]

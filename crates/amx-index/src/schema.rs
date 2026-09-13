@@ -6,8 +6,8 @@
 //! set instead of a side ledger that can drift, per §5.1's own note.
 
 use tantivy::schema::{
-    DateOptions, FAST, IndexRecordOption, STORED, Schema, SchemaBuilder, TextFieldIndexing,
-    TextOptions,
+    DateOptions, FAST, INDEXED, IndexRecordOption, STORED, Schema, SchemaBuilder,
+    TextFieldIndexing, TextOptions,
 };
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer};
 
@@ -95,7 +95,7 @@ pub fn build_schema() -> (Schema, Fields) {
     let date_received = builder.add_date_field("date_received", date_opts);
 
     let flags = builder.add_u64_field("flags", FAST | STORED);
-    let thread_id = builder.add_i64_field("thread_id", FAST | STORED);
+    let thread_id = builder.add_i64_field("thread_id", FAST | STORED | INDEXED);
     let body_state = builder.add_u64_field("body_state", FAST | STORED);
     let attachment_state = builder.add_u64_field("attachment_state", FAST | STORED);
 

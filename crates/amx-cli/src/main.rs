@@ -1,14 +1,18 @@
 mod doctor;
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Instant;
 
 use amx_core::AmxError;
 use amx_core::config::Config;
 use amx_index::sync::{SyncEngine, SyncReport};
+use amx_mcp::server::{AmxServer, AppState};
+use amx_mcp::transport::{self, HttpServeConfig};
 use amx_store::RoConnection;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "amxcli")]
@@ -29,6 +33,23 @@ enum Command {
     },
     /// Alias for `index` without `--profile` — the steady-state incremental sync invocation.
     Sync,
+    /// Serve the read lane over MCP (stdio or streamable HTTP).
+    Serve {
+        #[arg(long, value_enum, default_value_t = Transport::Stdio)]
+        transport: Transport,
+        /// Only used by `--transport http`. Binding a non-loopback address requires `--token`.
+        #[arg(long, default_value = "127.0.0.1:8811")]
+        bind: SocketAddr,
+        /// Bearer token required on every request once `--transport http` binds non-loopback.
+        #[arg(long)]
+        token: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Transport {
+    Stdio,
+    Http,
 }
 
 fn main() -> ExitCode {
@@ -37,6 +58,53 @@ fn main() -> ExitCode {
         Command::Doctor => run_doctor(),
         Command::Index { profile } => run_sync(profile.as_deref()),
         Command::Sync => run_sync(None),
+        Command::Serve {
+            transport,
+            bind,
+            token,
+        } => run_serve(transport, bind, token),
+    }
+}
+
+fn run_serve(transport_kind: Transport, bind: SocketAddr, token: Option<String>) -> ExitCode {
+    if let Transport::Http = transport_kind
+        && let Err(err) = transport::require_token_for_non_loopback(bind, token.as_deref())
+    {
+        eprintln!("amxcli: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    let config = Config::load();
+    let state = match AppState::open(&config) {
+        Ok(state) => Arc::new(state),
+        Err(err) => {
+            eprintln!("amxcli: serve failed to open store: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let server = AmxServer::new(state);
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("amxcli: failed to start async runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let result = runtime.block_on(async move {
+        match transport_kind {
+            Transport::Stdio => transport::serve_stdio(server).await,
+            Transport::Http => transport::serve_http(server, HttpServeConfig { bind, token }).await,
+        }
+    });
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("amxcli: serve failed: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

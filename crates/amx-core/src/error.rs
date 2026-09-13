@@ -88,6 +88,16 @@ pub enum AmxError {
     },
 
     #[error(
+        "account {requested:?} matched none of {available} accounts \
+         (percent-decoded, NFC-normalised); closest: {suggestions:?}"
+    )]
+    AccountFilterUnmatched {
+        requested: String,
+        available: usize,
+        suggestions: Vec<String>,
+    },
+
+    #[error(
         "attachment {name:?} is not on disk: message is a partial download \
          ({on_disk} of {declared} bytes). Run `amxcli fetch-full --rowid {rowid}`"
     )]
@@ -96,6 +106,19 @@ pub enum AmxError {
         name: String,
         on_disk: u64,
         declared: u64,
+    },
+
+    #[error("message {0} not found in the local store")]
+    MessageNotFound(i64),
+
+    #[error("message {rowid} has no attachment named {name:?}")]
+    AttachmentNotFound { rowid: i64, name: String },
+
+    #[error("attachment {name:?} on message {rowid} could not be extracted to text: {reason}")]
+    AttachmentUnextractable {
+        rowid: i64,
+        name: String,
+        reason: String,
     },
 
     #[error("message {rowid} body unavailable: {reason}")]
@@ -128,6 +151,9 @@ pub enum AmxError {
         path: PathBuf,
         reason: String,
     },
+
+    #[error("search query {query:?} could not be parsed: {reason}")]
+    SearchQueryInvalid { query: String, reason: String },
 
     #[error(transparent)]
     Parse(#[from] ParseError),

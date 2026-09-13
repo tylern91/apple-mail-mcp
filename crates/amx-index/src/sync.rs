@@ -11,14 +11,13 @@ use amx_parse::{EmlxAddress, ParsedMessage, extract_by_content_type, html_to_tex
 use amx_store::account::AccountResolver;
 use amx_store::conn::RoConnection;
 use amx_store::mailbox_path::MailboxPathResolver;
-use amx_store::paths::EmlxPathResolver;
 use amx_store::registry::{Mailbox, MailboxRegistry};
 use rusqlite::Connection as MetaConnection;
 use tantivy::directory::MmapDirectory;
 use tantivy::{DateTime, Index, TantivyDocument, Term};
 
 use crate::classify::{AvailabilityClassifier, Classified};
-use crate::fetch::{BodyFetcher, FetchedBody};
+use crate::fetch::{BodyFetcher, resolved_emlx_path};
 use crate::meta;
 use crate::planner::{SyncPlanner, WorkItem, WorkKind};
 use crate::quarantine;
@@ -195,14 +194,6 @@ impl SyncEngine {
         report.quarantined += 1;
         Ok(())
     }
-}
-
-/// The path recorded against a message — whichever of the full/partial `.emlx` paths
-/// [`BodyFetcher::fetch`] actually found, or the full path when neither exists (there is nothing
-/// to distinguish in that case).
-fn resolved_emlx_path(mailbox_dir: &Path, rowid: i64, fetched: &FetchedBody) -> PathBuf {
-    let partial = matches!(fetched, FetchedBody::Partial(_));
-    EmlxPathResolver::resolve(mailbox_dir, rowid, partial)
 }
 
 fn build_document(

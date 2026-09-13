@@ -7,6 +7,7 @@ use std::path::Path;
 
 use amx_core::AmxError;
 use amx_core::traits::AccessState;
+use amx_store::readiness::{count_account_directories, probe_access};
 use amx_store::{MailboxRegistry, RoConnection};
 
 /// Raw filesystem coverage — counted by walking `.emlx`/`.partial.emlx` files directly, not by
@@ -81,31 +82,6 @@ pub fn gather(store_path: &Path) -> Result<DoctorReport, AmxError> {
         mailbox_count,
         coverage,
     })
-}
-
-#[cfg(target_os = "macos")]
-fn probe_access(store_path: &Path) -> AccessState {
-    amx_store::tcc::TccProbe::probe(store_path)
-}
-
-/// TCC (and therefore Full Disk Access) is a macOS-specific access-control mechanism — there is
-/// nothing to deny access on any other platform `amxcli` might be built for during development.
-#[cfg(not(target_os = "macos"))]
-fn probe_access(_store_path: &Path) -> AccessState {
-    AccessState::Granted
-}
-
-/// Every account UUID directory sits directly under the store root, as a sibling of the
-/// non-account `MailData` directory that holds the Envelope Index.
-fn count_account_directories(store_path: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(store_path) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
-        .filter(|entry| entry.file_name() != "MailData")
-        .count()
 }
 
 fn count_coverage(store_path: &Path) -> CoverageCounts {

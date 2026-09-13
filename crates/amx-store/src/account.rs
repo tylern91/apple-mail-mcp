@@ -36,24 +36,59 @@ impl AccountResolver {
         let conn = self.conn.as_connection();
         let row = conn
             .query_row(
-                "SELECT Z_PK, ZACCOUNTDESCRIPTION, ZUSERNAME, ZACCOUNTTYPE \
+                "SELECT Z_PK, ZIDENTIFIER, ZACCOUNTDESCRIPTION, ZUSERNAME, ZACCOUNTTYPE \
                  FROM ZACCOUNT WHERE ZIDENTIFIER = ?1",
                 [identifier],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, i64>(3)?,
-                    ))
-                },
+                Self::row_to_tuple,
             )
             .optional()?;
 
-        let Some((account_pk, description, username, account_type_pk)) = row else {
-            return Ok(None);
-        };
+        row.map(|row| self.build_resolved(row)).transpose()
+    }
 
+    /// Every account whose `ZUSERNAME` (the account's own login/email address) matches `address`
+    /// case-insensitively — resolves [`crate::query`]'s `resolve_address` tool. A single address
+    /// can legitimately own more than one account row (observed live: the same iCloud address
+    /// backing both a Mail and a Calendar-only account), so this returns all matches rather than
+    /// assuming uniqueness.
+    pub fn resolve_by_address(&self, address: &str) -> Result<Vec<ResolvedAccount>, AmxError> {
+        let conn = self.conn.as_connection();
+        let mut stmt = conn.prepare(
+            "SELECT Z_PK, ZIDENTIFIER, ZACCOUNTDESCRIPTION, ZUSERNAME, ZACCOUNTTYPE \
+             FROM ZACCOUNT WHERE ZUSERNAME IS NOT NULL AND LOWER(ZUSERNAME) = LOWER(?1)",
+        )?;
+        let rows = stmt.query_map([address], Self::row_to_tuple)?;
+
+        rows.collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|row| self.build_resolved(row))
+            .collect()
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn row_to_tuple(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<(i64, String, Option<String>, Option<String>, i64)> {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+        ))
+    }
+
+    fn build_resolved(
+        &self,
+        (account_pk, identifier, description, username, account_type_pk): (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+        ),
+    ) -> Result<ResolvedAccount, AmxError> {
+        let conn = self.conn.as_connection();
         let type_identifier: Option<String> = conn
             .query_row(
                 "SELECT ZIDENTIFIER FROM ZACCOUNTTYPE WHERE Z_PK = ?1",
@@ -78,13 +113,13 @@ impl AccountResolver {
         let display_name = description
             .filter(|s| !s.is_empty())
             .or_else(|| username.filter(|s| !s.is_empty()))
-            .unwrap_or_else(|| identifier.to_string());
+            .unwrap_or_else(|| identifier.clone());
 
-        Ok(Some(ResolvedAccount {
-            identifier: identifier.to_string(),
+        Ok(ResolvedAccount {
+            identifier,
             display_name,
             kind,
-        }))
+        })
     }
 
     /// `UseMailDrop` is set only on iCloud Mail accounts among the IMAP-typed rows — verified
