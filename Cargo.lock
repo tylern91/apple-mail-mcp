@@ -50,6 +50,7 @@ dependencies = [
 name = "amx-cli"
 version = "0.3.0"
 dependencies = [
+ "amx-automation",
  "amx-core",
  "amx-index",
  "amx-mcp",

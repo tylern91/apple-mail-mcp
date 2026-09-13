@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use amx_automation::locate;
 use amx_automation::op::MailboxAddress;
-use amx_core::AmxError;
+use amx_core::{AmxError, AttachmentState};
 use amx_index::mutate::MutationWriter;
 use amx_store::account::AccountResolver;
 use amx_store::conn::RoConnection;
@@ -182,6 +182,43 @@ pub fn finish_set_flag(
         });
     }
     Ok(SetFlagResponse { rowid, flagged })
+}
+
+/// Called after the JXA `fetch_full` mutation has been issued (Phase 4 task 8, `amxcli
+/// fetch-full` — deliberately not a 7th MCP tool): re-parses the now-fully-downloaded `.emlx`
+/// through [`resolve_message`]'s own [`AvailabilityClassifier`](amx_index::classify::AvailabilityClassifier)
+/// call and re-indexes. Fails if the attachment state is still `NotDownloaded` after the fetch —
+/// Mail.app declined, or the download did not complete.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_fetch_full(
+    conn: &RoConnection,
+    registry: &MailboxRegistry,
+    store_root: &Path,
+    account_resolver: &AccountResolver,
+    index_dir: &Path,
+    meta_path: &Path,
+    rowid: i64,
+) -> Result<AttachmentState, AmxError> {
+    let updated = reindex(
+        conn,
+        registry,
+        store_root,
+        account_resolver,
+        index_dir,
+        meta_path,
+        rowid,
+    )?;
+    if matches!(
+        updated.classified.attachments,
+        AttachmentState::NotDownloaded { .. }
+    ) {
+        return Err(AmxError::MutationVerificationFailed {
+            rowid,
+            expected: "attachments downloaded".to_string(),
+            observed: "still NotDownloaded after fetch_full".to_string(),
+        });
+    }
+    Ok(updated.classified.attachments)
 }
 
 /// Everything a move/trash mutate tool needs before its JXA round-trip: the message's current

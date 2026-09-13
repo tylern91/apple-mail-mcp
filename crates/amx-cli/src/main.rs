@@ -12,6 +12,10 @@ use amx_index::sync::{SyncEngine, SyncReport};
 use amx_mcp::server::{AmxServer, AppState};
 use amx_mcp::transport::{self, HttpServeConfig};
 use amx_store::RoConnection;
+#[cfg(target_os = "macos")]
+use amx_store::account::AccountResolver;
+#[cfg(target_os = "macos")]
+use amx_store::registry::MailboxRegistry;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -44,6 +48,12 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Ask Mail.app to download a message's full body/attachments, then re-classify and
+    /// re-index it (macOS only — Mail.app JXA automation is the only way to force the fetch).
+    FetchFull {
+        /// Envelope Index ROWID of the message to fetch.
+        rowid: i64,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -63,6 +73,13 @@ fn main() -> ExitCode {
             bind,
             token,
         } => run_serve(transport, bind, token),
+        #[cfg(target_os = "macos")]
+        Command::FetchFull { rowid } => run_fetch_full(rowid),
+        #[cfg(not(target_os = "macos"))]
+        Command::FetchFull { .. } => {
+            eprintln!("amxcli: fetch-full requires macOS (Mail.app JXA automation)");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -175,6 +192,102 @@ fn run_sync(profile_path: Option<&Path>) -> ExitCode {
         }
         Err(err) => {
             eprintln!("amxcli: sync failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Drives Task 8's `amxcli fetch-full rowid`: resolve → JXA `fetch_full` → re-classify/re-index,
+/// reusing the same mutate-lane building blocks as the MCP tools (`amx_mcp::tools::mutate`).
+/// Deliberately a CLI subcommand, not an MCP tool, so the umbrella's six-tool mutate contract
+/// stays exact.
+#[cfg(target_os = "macos")]
+fn run_fetch_full(rowid: i64) -> ExitCode {
+    let Some(store_path) = configured_store_path() else {
+        return ExitCode::FAILURE;
+    };
+    let config = Config::load();
+
+    let accounts_db = match accounts_db_path(&store_path) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("amxcli: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let index_dir = config.cache_dir.join("index");
+    let meta_path = config.cache_dir.join("meta.sqlite");
+    let envelope_index_path = store_path.join("MailData").join("Envelope Index");
+
+    let store_conn = match RoConnection::open(&envelope_index_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("amxcli: fetch-full failed to open store: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let registry = match MailboxRegistry::load(&store_conn) {
+        Ok(registry) => registry,
+        Err(err) => {
+            eprintln!("amxcli: fetch-full failed to load mailbox registry: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let account_resolver = match AccountResolver::open(&accounts_db) {
+        Ok(resolver) => resolver,
+        Err(err) => {
+            eprintln!("amxcli: fetch-full failed to open accounts db: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let addressed = match amx_mcp::tools::mutate::resolve_and_address(
+        &store_conn,
+        &registry,
+        &store_path,
+        &account_resolver,
+        rowid,
+    ) {
+        Ok(addressed) => addressed,
+        Err(err) => {
+            eprintln!("amxcli: fetch-full failed to resolve rowid {rowid}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("amxcli: failed to start async runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let jxa_result = runtime.block_on(amx_automation::jxa::run(
+        &amx_automation::JxaRequest::FetchFull {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+        },
+    ));
+    if let Err(err) = jxa_result {
+        eprintln!("amxcli: fetch-full JXA call failed for rowid {rowid}: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    match amx_mcp::tools::mutate::finish_fetch_full(
+        &store_conn,
+        &registry,
+        &store_path,
+        &account_resolver,
+        &index_dir,
+        &meta_path,
+        rowid,
+    ) {
+        Ok(attachments) => {
+            println!("rowid {rowid}: {attachments:?}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("amxcli: fetch-full failed to re-index rowid {rowid}: {err}");
             ExitCode::FAILURE
         }
     }
