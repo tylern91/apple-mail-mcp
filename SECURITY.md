@@ -29,7 +29,8 @@ recorded to the repository's Security tab for tracking but don't block.
 |---|---|
 | Mail store integrity | Envelope Index opened `mode=ro`, `SELECT`/`PRAGMA` only; all mutation goes through Mail.app, never direct writes to Apple's store |
 | Data egress | Nothing leaves the machine except mail a client explicitly sends. No third-party relay, no telemetry |
-| Credentials | SMTP secrets live in the Keychain via `keyring`; never written to config, never logged; a redaction filter runs on the tracing layer |
+| Credentials | SMTP/IMAP secrets live in the Keychain (service `apple-mail-mcp`, account = email address) via `keyring`; never written to config. `Credential`'s `Debug` impl is hand-written to print `Credential::OAuth2(<redacted>)` / `Credential::Password(<redacted>)` rather than deriving one — there is no `tracing` layer in this workspace to filter, so redaction is enforced at the type itself, not at a logging boundary |
+| OAuth client secret | The Google OAuth Desktop-app client ID/secret (`AMX_GOOGLE_CLIENT_ID`/`AMX_GOOGLE_CLIENT_SECRET`) are read from the environment only, never committed; only the resulting refresh token is persisted, to the Keychain |
 | Read-only mode | `AMX_READ_ONLY=1` removes every mutating tool from `tools/list` |
 | Destructive actions | `trash_messages` moves to Mail's Trash — it never erases; bulk destructive plans take a separate, capped path with a review step |
 | Attachment writes | Only under a configured temp directory; validated against path traversal (`..`, absolute paths, symlink escapes) |

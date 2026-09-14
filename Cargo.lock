@@ -53,7 +53,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "amx-automation"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-core",
  "amx-store",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "amx-cli"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-core",
  "amx-index",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "amx-compose"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-core",
  "amx-parse",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "amx-core"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "percent-encoding",
  "rusqlite",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "amx-index"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-core",
  "amx-parse",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "amx-mcp"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-compose",
  "amx-core",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "amx-parse"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-core",
  "html5ever",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "amx-send"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-compose",
  "amx-core",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "amx-store"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "amx-core",
  "notify",
