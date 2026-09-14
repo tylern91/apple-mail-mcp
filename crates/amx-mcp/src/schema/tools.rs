@@ -255,6 +255,100 @@ pub struct StatusResponse {
     pub degraded_since: Option<String>,
 }
 
+// ---- send_message / create_draft (Phase 5 task 6) ----
+//
+// `from` is the sending account's own email address (`ZUSERNAME` in Accounts4.sqlite) — the
+// handler resolves it to an account identifier via `AccountResolver::resolve_by_address`, the
+// same lookup `resolve_address` already exposes, rather than requiring callers to know the
+// Mail store's internal account UUID.
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SendMessageRequest {
+    pub from: String,
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub text_body: Option<String>,
+    pub html_body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SendMessageResponse {
+    pub message_id: String,
+    /// `false` for Gmail accounts (D2: Gmail files SMTP-submitted mail into Sent server-side, so
+    /// this tool never appends there) and for a failed `APPEND` after a successful send — a
+    /// partial success, reported via `filing_error` rather than as a hard error, since the mail
+    /// already left (the parasxos #3 guard extended to the filing step).
+    pub filed_to_sent: bool,
+    pub filing_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CreateDraftRequest {
+    pub from: String,
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub text_body: Option<String>,
+    pub html_body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateDraftResponse {
+    pub message_id: String,
+}
+
+// ---- reply_message / forward_message (Phase 5 task 7) ----
+//
+// `text_body`/`html_body`, when supplied, override `derive_reply`/`derive_forward`'s default body
+// content (the original message's body for a reply; the quoted-history body for a forward) —
+// left `None`, that default stands. `compose` itself still rejects a draft with both bodies
+// absent, so a source message with no body and no caller-supplied replacement is a hard error,
+// never a silently empty send.
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ReplyMessageRequest {
+    pub rowid: i64,
+    pub from: String,
+    #[serde(default)]
+    pub reply_all: bool,
+    pub text_body: Option<String>,
+    pub html_body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReplyMessageResponse {
+    pub message_id: String,
+    pub filed_to_sent: bool,
+    pub filing_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ForwardMessageRequest {
+    pub rowid: i64,
+    pub from: String,
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    pub text_body: Option<String>,
+    pub html_body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ForwardMessageResponse {
+    pub message_id: String,
+    pub filed_to_sent: bool,
+    pub filing_error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +395,14 @@ mod tests {
         assert_schema!(ListMailboxesResponse);
         assert_schema!(DoctorRequest);
         assert_schema!(DoctorResponse);
+        assert_schema!(SendMessageRequest);
+        assert_schema!(SendMessageResponse);
+        assert_schema!(CreateDraftRequest);
+        assert_schema!(CreateDraftResponse);
+        assert_schema!(ReplyMessageRequest);
+        assert_schema!(ReplyMessageResponse);
+        assert_schema!(ForwardMessageRequest);
+        assert_schema!(ForwardMessageResponse);
         assert_schema!(StatusRequest);
         assert_schema!(StatusResponse);
     }

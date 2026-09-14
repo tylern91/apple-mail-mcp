@@ -31,9 +31,10 @@ use crate::schema::{Coverage, Envelope, SearchEnvelope};
 use crate::tool_lane::{ToolDescriptor, ToolLane, visible_tools};
 use crate::tools;
 
-/// The 14-tool catalog backing `tools/list`'s `ToolLane` filter. Every tool here is `Read` or
-/// `Diagnostic` — Phase 3 ships no `Mutate`/`Send` surface (sub-plan decision).
-const CATALOG: &[ToolDescriptor] = &[
+/// The read/diagnostic tool catalog backing `tools/list`'s `ToolLane` filter. The send lane
+/// (Phase 5) is appended by [`catalog`] only on macOS, where `amx-send` is buildable — the Linux
+/// portable-CI job builds `amx-mcp` without it (`rust.yml`'s `check-portable` job).
+const READ_CATALOG: &[ToolDescriptor] = &[
     ToolDescriptor {
         name: "search_messages",
         lane: ToolLane::Read,
@@ -105,6 +106,41 @@ const CATALOG: &[ToolDescriptor] = &[
         read_only_hint: true,
     },
 ];
+
+/// The send-lane catalog (Phase 5 task 6), macOS-only. Both carry `openWorldHint: true` (mail
+/// actually leaves the machine) — see the `#[tool]` annotations on `send_message`/`create_draft`.
+#[cfg(target_os = "macos")]
+const SEND_CATALOG: &[ToolDescriptor] = &[
+    ToolDescriptor {
+        name: "send_message",
+        lane: ToolLane::Send,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "create_draft",
+        lane: ToolLane::Send,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "reply_message",
+        lane: ToolLane::Send,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "forward_message",
+        lane: ToolLane::Send,
+        read_only_hint: false,
+    },
+];
+
+/// The full tool catalog for this platform build.
+fn catalog() -> Vec<ToolDescriptor> {
+    #[allow(unused_mut)]
+    let mut all = READ_CATALOG.to_vec();
+    #[cfg(target_os = "macos")]
+    all.extend_from_slice(SEND_CATALOG);
+    all
+}
 
 /// Derives `~/Library/Accounts/Accounts4.sqlite` as a sibling of `store_path`'s grandparent —
 /// the same derivation `amxcli`'s `main.rs` uses; duplicated rather than shared since `amx-mcp`
@@ -186,10 +222,12 @@ pub struct AmxServer {
 
 impl AmxServer {
     pub fn new(state: Arc<AppState>) -> Self {
-        Self {
-            state,
-            tool_router: Self::tool_router(),
-        }
+        #[cfg(target_os = "macos")]
+        let tool_router = Self::tool_router() + Self::send_tool_router();
+        #[cfg(not(target_os = "macos"))]
+        let tool_router = Self::tool_router();
+
+        Self { state, tool_router }
     }
 
     fn envelope<T>(&self, result: T) -> Envelope<T> {
@@ -424,6 +462,91 @@ impl AmxServer {
     }
 }
 
+// `#[tool_router]` (rmcp-macros' `tool_router::tool_router`) collects every `#[tool]`-tagged fn by
+// scanning the impl block's raw tokens — it does not evaluate `#[cfg]` attributes on those fns, so
+// a per-method `#[cfg(target_os = "macos")]` inside the shared impl block above would still emit a
+// reference to the (cfg'd-away) method on non-macOS targets. Gating the entire impl block instead
+// keeps the macro from ever seeing these fns on a non-macOS build.
+#[cfg(target_os = "macos")]
+#[tool_router(router = send_tool_router)]
+impl AmxServer {
+    #[tool(
+        name = "send_message",
+        description = "Compose and submit an email over the sending account's own SMTP endpoint, filing a copy to Sent via IMAP APPEND unless the account is Gmail.",
+        annotations(read_only_hint = false, open_world_hint = true)
+    )]
+    pub async fn send_message(
+        &self,
+        params: Parameters<SendMessageRequest>,
+    ) -> Result<Json<Envelope<SendMessageResponse>>, ErrorData> {
+        let resolver = self
+            .state
+            .account_resolver
+            .lock()
+            .expect("account_resolver poisoned");
+        let response = tools::run_send_message(&resolver, &params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[tool(
+        name = "create_draft",
+        description = "Compose an email and file it into the account's Drafts mailbox via IMAP APPEND — never sends.",
+        annotations(read_only_hint = false, open_world_hint = true)
+    )]
+    pub async fn create_draft(
+        &self,
+        params: Parameters<CreateDraftRequest>,
+    ) -> Result<Json<Envelope<CreateDraftResponse>>, ErrorData> {
+        let resolver = self
+            .state
+            .account_resolver
+            .lock()
+            .expect("account_resolver poisoned");
+        let response = tools::run_create_draft(&resolver, &params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[tool(
+        name = "reply_message",
+        description = "Reply to a message by rowid — derives recipients, subject, and threading headers from the source message, then submits over SMTP (filing to Sent unless the account is Gmail).",
+        annotations(read_only_hint = false, open_world_hint = true)
+    )]
+    pub async fn reply_message(
+        &self,
+        params: Parameters<ReplyMessageRequest>,
+    ) -> Result<Json<Envelope<ReplyMessageResponse>>, ErrorData> {
+        let resolved = self.resolve(params.0.rowid).map_err(to_error_data)?;
+        let resolver = self
+            .state
+            .account_resolver
+            .lock()
+            .expect("account_resolver poisoned");
+        let response =
+            tools::run_reply_message(&resolver, &resolved, &params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[tool(
+        name = "forward_message",
+        description = "Forward a message by rowid to new recipients — quotes the source message's history as the body, with no inherited threading headers, then submits over SMTP (filing to Sent unless the account is Gmail).",
+        annotations(read_only_hint = false, open_world_hint = true)
+    )]
+    pub async fn forward_message(
+        &self,
+        params: Parameters<ForwardMessageRequest>,
+    ) -> Result<Json<Envelope<ForwardMessageResponse>>, ErrorData> {
+        let resolved = self.resolve(params.0.rowid).map_err(to_error_data)?;
+        let resolver = self
+            .state
+            .account_resolver
+            .lock()
+            .expect("account_resolver poisoned");
+        let response =
+            tools::run_forward_message(&resolver, &resolved, &params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+}
+
 #[rmcp::tool_handler(router = self.tool_router)]
 impl ServerHandler for AmxServer {
     async fn list_tools(
@@ -431,8 +554,9 @@ impl ServerHandler for AmxServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        let catalog = catalog();
         let visible_names: std::collections::HashSet<&str> =
-            visible_tools(CATALOG, self.state.read_only)
+            visible_tools(&catalog, self.state.read_only)
                 .into_iter()
                 .map(|descriptor| descriptor.name)
                 .collect();
@@ -458,16 +582,20 @@ mod tests {
 
     #[test]
     fn catalog_names_match_every_registered_tool() {
+        #[cfg(target_os = "macos")]
+        let router = AmxServer::tool_router() + AmxServer::send_tool_router();
+        #[cfg(not(target_os = "macos"))]
         let router = AmxServer::tool_router();
         let registered: std::collections::HashSet<_> =
             router.list_all().into_iter().map(|t| t.name).collect();
-        for descriptor in CATALOG {
+        let catalog = catalog();
+        for descriptor in &catalog {
             assert!(
                 registered.contains(descriptor.name),
                 "catalog entry {:?} has no matching #[tool]",
                 descriptor.name
             );
         }
-        assert_eq!(registered.len(), CATALOG.len());
+        assert_eq!(registered.len(), catalog.len());
     }
 }
