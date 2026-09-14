@@ -165,6 +165,15 @@ pub enum AmxError {
         reason: String,
     },
 
+    #[error(
+        "no credential stored for {email} — run `amxcli credentials set {email}` \
+         (or `amxcli auth google` for a Google account)"
+    )]
+    CredentialUnavailable { email: String },
+
+    #[error("OAuth flow failed: {reason}")]
+    OAuthFlowFailed { reason: String },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 
