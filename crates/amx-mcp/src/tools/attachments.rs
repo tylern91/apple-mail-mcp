@@ -184,6 +184,8 @@ mod tests {
             subject: None,
             from: Vec::new(),
             to: Vec::new(),
+            cc: Vec::new(),
+            reply_to: Vec::new(),
             date: None,
             message_id: None,
             in_reply_to: None,

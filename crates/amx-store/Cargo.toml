@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 amx-core = { path = "../amx-core", features = ["sqlite"] }
 percent-encoding = "2"
+plist = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 unicode-normalization = "0.1"
 

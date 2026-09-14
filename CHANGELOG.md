@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-09-14
+## [1.1.0] - 2026-09-14
 
 ### Added
 
@@ -40,6 +40,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected `completeness.rs`'s doc-comment example (ROWID 42191): the cited
   `X-Apple-Content-Length` string lives inside a nested MIME part's headers, not the
   message's top-level header block the oracle actually reads.
+
+## [1.0.0] - 2026-09-14
+
+The wire contract (tool names, schemas, and lane assignments) freezes as of
+this release.
+
+### Added
+
+- `amx-compose`: portable MIME construction via `mail-builder`
+  (`Draft`/`EmailAddress`/`compose`) — multipart/alternative bodies, RFC 2047
+  header encoding, generated `Message-ID`, `References`/`In-Reply-To`
+  threading. `derive_reply`/`derive_forward` compute the reply-all recipient
+  set and quoted-history forward body from a source message; a missing
+  `Message-ID` or an unreadable/unindexed source message is a hard
+  `AmxError::ReplyDerivationFailed`, never a silent fallback to a plain send.
+- `amx-send` (macOS only): `CredentialBroker` (Keychain-backed, service
+  `apple-mail-mcp`), `Provider::{Google, AppSpecificPassword}`, OAuth2/XOAUTH2
+  for Google accounts and app-specific-password auth for iCloud/generic IMAP;
+  `submit` (SMTP, STARTTLS) and `append_to_special_use` (IMAP `APPEND` to the
+  `\Sent`/`\Drafts` special-use mailbox).
+- `amx-mcp`: the send lane — `send_message`, `create_draft`, `reply_message`,
+  `forward_message` — gated behind `ToolLane::Send`, hidden under
+  `AMX_READ_ONLY`, `openWorldHint: true`. Sent-mailbox filing follows IMAP
+  `APPEND` for iCloud/IMAP/Exchange accounts, skipped for Gmail (server-side
+  Sent filing) — the Gmail/non-Gmail distinction is derived from the
+  account's SMTP hostname suffix, not `AccountKind`.
+- `crates/amx-compose/tests/subject_non_ascii.rs`: regression fixture
+  (UseJunior #198) asserting a non-ASCII `Subject:` round-trips through a
+  single `=?utf-8?` encoded-word pass with no double-encoding.
+
+### Known gaps
+
+- Sent-mailbox filing has no path for POP or On-My-Mac accounts — neither
+  exposes a remote protocol to `APPEND` over. This is a documented limitation,
+  not a bug.
+- Live-send verification (non-ASCII subject arriving correctly in Outlook and
+  Gmail, reply `References`/reply-all correctness against a real thread) is
+  **deferred** — it requires a Google Cloud OAuth Desktop-app client and an
+  iCloud app-specific password loaded into the Keychain, and `amxcli` has no
+  `credentials`/`auth` subcommand yet to drive that setup. Until this is done,
+  `send_message`/`reply_message`/`forward_message`/`create_draft` are
+  code-reviewed, unit-tested, and clippy/deny-clean but have not exchanged
+  mail with a real SMTP/IMAP server.
+- There is no `tracing` layer anywhere in this workspace, so credential
+  redaction is enforced structurally instead (a manual `Debug` impl on
+  `Credential` that never prints the secret) rather than via a log-layer
+  filter; see `SECURITY.md`.
 
 ## [0.3.0] - 2026-09-13
 

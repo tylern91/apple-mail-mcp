@@ -176,6 +176,41 @@ pub enum AmxError {
     #[error("triage plan {hash} is unknown (never frozen, or the hash was mistyped)")]
     TriagePlanNotFound { hash: String },
 
+    #[error("cannot compose message: {reason}")]
+    ComposeInvalid { reason: String },
+
+    #[error("cannot derive {mode} for message {rowid}: {reason}")]
+    ReplyDerivationFailed {
+        rowid: i64,
+        mode: &'static str,
+        reason: String,
+    },
+
+    #[error(
+        "no credential stored for {email} — run `amxcli credentials set {email}` \
+         (or `amxcli auth google` for a Google account)"
+    )]
+    CredentialUnavailable { email: String },
+
+    #[error("OAuth flow failed: {reason}")]
+    OAuthFlowFailed { reason: String },
+
+    #[error("could not resolve SMTP sending settings for account {identifier}: {reason}")]
+    SendingSettingsUnresolvable { identifier: String, reason: String },
+
+    #[error("could not resolve IMAP receiving settings for account {identifier}: {reason}")]
+    ReceivingSettingsUnresolvable { identifier: String, reason: String },
+
+    #[error("could not submit message to {hostname}:{port}: {reason}")]
+    SmtpSubmissionFailed {
+        hostname: String,
+        port: u16,
+        reason: String,
+    },
+
+    #[error("could not file message to the {mailbox} mailbox via IMAP APPEND: {reason}")]
+    ImapAppendFailed { mailbox: String, reason: String },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 

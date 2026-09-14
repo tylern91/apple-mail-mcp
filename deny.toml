@@ -20,6 +20,10 @@ allow = [
   # notify (task 8, FSEvents watcher): public-domain-equivalent, permissive,
   # not GPL-family — no conflict with §1.4's copyleft boundary.
   "CC0-1.0",
+  # quoted_printable (transitive via lettre, Phase 5 task 4 SMTP submission): a
+  # public-domain-equivalent permissive license, strictly less restrictive than the
+  # BSD variants already allowed — no conflict with §1.4's copyleft boundary.
+  "0BSD",
 ]
 confidence-threshold = 0.8
 

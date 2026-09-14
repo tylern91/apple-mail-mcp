@@ -13,9 +13,11 @@ workspace = true
 
 [dependencies]
 amx-automation = { path = "../amx-automation" }
+amx-compose = { path = "../amx-compose" }
 amx-core = { path = "../amx-core" }
 amx-index = { path = "../amx-index" }
 amx-parse = { path = "../amx-parse" }
+amx-send = { path = "../amx-send" }
 amx-store = { path = "../amx-store" }
 axum = "0.8"
 base64 = "0.22"
