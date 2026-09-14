@@ -82,6 +82,7 @@ dependencies = [
  "amx-parse",
  "gethostname",
  "mail-builder",
+ "mail-parser",
 ]
 
 [[package]]

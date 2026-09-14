@@ -16,3 +16,6 @@ amx-core = { path = "../amx-core" }
 amx-parse = { path = "../amx-parse" }
 mail-builder = "1.0.0"
 gethostname = "1"
+
+[dev-dependencies]
+mail-parser = "0.11"
