@@ -222,10 +222,12 @@ pub struct AmxServer {
 
 impl AmxServer {
     pub fn new(state: Arc<AppState>) -> Self {
-        Self {
-            state,
-            tool_router: Self::tool_router(),
-        }
+        #[cfg(target_os = "macos")]
+        let tool_router = Self::tool_router() + Self::send_tool_router();
+        #[cfg(not(target_os = "macos"))]
+        let tool_router = Self::tool_router();
+
+        Self { state, tool_router }
     }
 
     fn envelope<T>(&self, result: T) -> Envelope<T> {
@@ -458,8 +460,16 @@ impl AmxServer {
         let response = tools::run_status(&self.state.health, &meta_conn).map_err(to_error_data)?;
         Ok(Json(response))
     }
+}
 
-    #[cfg(target_os = "macos")]
+// `#[tool_router]` (rmcp-macros' `tool_router::tool_router`) collects every `#[tool]`-tagged fn by
+// scanning the impl block's raw tokens — it does not evaluate `#[cfg]` attributes on those fns, so
+// a per-method `#[cfg(target_os = "macos")]` inside the shared impl block above would still emit a
+// reference to the (cfg'd-away) method on non-macOS targets. Gating the entire impl block instead
+// keeps the macro from ever seeing these fns on a non-macOS build.
+#[cfg(target_os = "macos")]
+#[tool_router(router = send_tool_router)]
+impl AmxServer {
     #[tool(
         name = "send_message",
         description = "Compose and submit an email over the sending account's own SMTP endpoint, filing a copy to Sent via IMAP APPEND unless the account is Gmail.",
@@ -478,7 +488,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "create_draft",
         description = "Compose an email and file it into the account's Drafts mailbox via IMAP APPEND — never sends.",
@@ -497,7 +506,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "reply_message",
         description = "Reply to a message by rowid — derives recipients, subject, and threading headers from the source message, then submits over SMTP (filing to Sent unless the account is Gmail).",
@@ -518,7 +526,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "forward_message",
         description = "Forward a message by rowid to new recipients — quotes the source message's history as the body, with no inherited threading headers, then submits over SMTP (filing to Sent unless the account is Gmail).",
@@ -575,6 +582,9 @@ mod tests {
 
     #[test]
     fn catalog_names_match_every_registered_tool() {
+        #[cfg(target_os = "macos")]
+        let router = AmxServer::tool_router() + AmxServer::send_tool_router();
+        #[cfg(not(target_os = "macos"))]
         let router = AmxServer::tool_router();
         let registered: std::collections::HashSet<_> =
             router.list_all().into_iter().map(|t| t.name).collect();
