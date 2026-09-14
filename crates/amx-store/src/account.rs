@@ -136,10 +136,11 @@ impl AccountResolver {
     ///
     /// Those three properties are NSKeyedArchiver-encoded plists, not plain SQLite columns —
     /// decoded via [`Self::keyed_archiver_string`]/[`Self::keyed_archiver_integer`]/
-    /// [`Self::keyed_archiver_bool`]. iCloud's stored `Hostname` is a non-string archived value
-    /// (observed live: an archived integer `1`, not a hostname) — when the decoded hostname isn't
-    /// a string, this falls back to a known-provider table keyed on [`AccountKind`] rather than
-    /// erroring, and only errors when neither the store nor the fallback table has an answer.
+    /// [`Self::keyed_archiver_bool`] (which itself unwraps both the plain-`NSString` and the
+    /// `NSMutableString`/`NS.string`-dictionary archiving shapes — observed live, both occur).
+    /// iCloud's SMTP account row has no `Hostname` property at all — when the store has no answer,
+    /// this falls back to a known-provider table keyed on [`AccountKind`] rather than erroring,
+    /// and only errors when neither the store nor the fallback table has an answer.
     ///
     /// Returns `Ok(None)` if `identifier` doesn't resolve to an account, or the account has no
     /// `SendingAccountIdentifier` at all (e.g. a receive-only or local account).
@@ -180,8 +181,8 @@ impl AccountResolver {
                 Self::fallback_smtp_hostname(kind).ok_or_else(|| {
                     AmxError::SendingSettingsUnresolvable {
                         identifier: identifier.to_string(),
-                        reason: "stored Hostname is not a string, and no known-provider fallback \
-                                 applies to this account kind"
+                        reason: "no Hostname stored for this SMTP account, and no known-provider \
+                                 fallback applies to this account kind"
                             .to_string(),
                     }
                 })?
@@ -244,7 +245,21 @@ impl AccountResolver {
     fn keyed_archiver_string(&self, owner_pk: i64, key: &str) -> Result<Option<String>, AmxError> {
         Ok(self
             .keyed_archiver_root(owner_pk, key)?
-            .and_then(|value| value.into_string()))
+            .and_then(Self::extract_archived_string))
+    }
+
+    /// Unwraps an archived string root object. Observed live: `Hostname` is archived as
+    /// `NSMutableString`, whose root object is a dictionary (`{"NS.string": "<value>"}`) rather
+    /// than a plain string — only `SendingAccountIdentifier`'s `NSString` archives as a plain
+    /// string. Both shapes are handled here rather than assuming one.
+    fn extract_archived_string(value: plist::Value) -> Option<String> {
+        if let Some(s) = value.as_string() {
+            return Some(s.to_string());
+        }
+        value
+            .into_dictionary()?
+            .remove("NS.string")
+            .and_then(|inner| inner.into_string())
     }
 
     fn keyed_archiver_integer(&self, owner_pk: i64, key: &str) -> Result<Option<i64>, AmxError> {
@@ -333,6 +348,19 @@ mod tests {
         bytes
     }
 
+    /// Wraps `value` the way Mail archives `Hostname` in practice — as an `NSMutableString`,
+    /// whose root object is a dictionary carrying the actual text under `NS.string` — verified
+    /// against a live store (a plain-string root, as `SendingAccountIdentifier` uses, is a
+    /// different NSString archiving path and is exercised by the other fixtures below).
+    fn ns_mutable_string(value: &str) -> plist::Value {
+        let mut dict = plist::Dictionary::new();
+        dict.insert(
+            "NS.string".to_string(),
+            plist::Value::String(value.to_string()),
+        );
+        plist::Value::Dictionary(dict)
+    }
+
     fn seed_sending_settings(path: &Path) {
         let conn = Connection::open(path).unwrap();
         conn.execute(
@@ -356,7 +384,7 @@ mod tests {
                 301,
                 21,
                 "Hostname",
-                keyed_archiver_blob(plist::Value::String("smtp.gmail.com".to_string())),
+                keyed_archiver_blob(ns_mutable_string("smtp.gmail.com")),
             ],
         )
         .unwrap();
