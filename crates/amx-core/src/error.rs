@@ -155,6 +155,9 @@ pub enum AmxError {
     #[error("search query {query:?} could not be parsed: {reason}")]
     SearchQueryInvalid { query: String, reason: String },
 
+    #[error("cannot compose message: {reason}")]
+    ComposeInvalid { reason: String },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 

@@ -13,3 +13,5 @@ workspace = true
 
 [dependencies]
 amx-core = { path = "../amx-core" }
+mail-builder = "1.0.0"
+gethostname = "1"
