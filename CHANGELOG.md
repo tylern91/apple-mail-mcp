@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-14
+
+### Added
+
+- `amx-automation`: typed JXA bridge to Mail.app (`osascript -l JavaScript`), scoped to
+  `SetReadState`/`SetFlag`/`Move`/`Trash`/`FetchFull`/`Locate` operations only — no
+  generic run-arbitrary-script escape hatch.
+- Six mutate tools (`ToolLane::Mutate`): `set_read_state`, `set_flag`, `move_messages`,
+  `trash_messages`, `triage_plan`, `triage_apply`. Every mutation re-parses the affected
+  `.emlx`, verifies the Mail.app-side change actually happened, and commits a Tantivy
+  index update before the tool call returns — closing the imdinu #66 ghost-result window
+  (regression-tested in `crates/amx-mcp/tests/ghost_results.rs`).
+- `triage_plan`/`triage_apply`: a frozen, content-addressed (SHA-256) bulk-operation plan
+  with per-item `exclude` support (the parasxos #4 fix) and a per-item
+  `success | skipped | failed` result list.
+- `amxcli fetch-full <rowid>`: asks Mail.app to download a message's full body/attachments,
+  then re-classifies and re-indexes it, converting `AttachmentState::NotDownloaded` to
+  `Extracted`/`None` once the download completes.
+- `amx-core`: `AmxError::{JxaFailed, JxaTimeout, MessageNotAddressable,
+  MutationVerificationFailed}`.
+- The six mutate tools and `fetch-full` are hidden under `AMX_READ_ONLY=1`.
+
+### Fixed
+
+- `wait_for_relocated_rowid`'s timeout branch returned `Ok(old_rowid)` when the old rowid
+  was still present after the settle budget, masking a failed relocate as a success.
+  Returns `MutationVerificationFailed` instead.
+
+### Documentation
+
+- Corrected `completeness.rs`'s doc-comment example (ROWID 42191): the cited
+  `X-Apple-Content-Length` string lives inside a nested MIME part's headers, not the
+  message's top-level header block the oracle actually reads.
+
 ## [0.3.0] - 2026-09-13
 
 ### Added
