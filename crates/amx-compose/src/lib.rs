@@ -8,6 +8,8 @@
 
 mod draft;
 mod mime;
+mod reply;
 
 pub use draft::{Attachment, Draft, EmailAddress};
 pub use mime::{ComposedMessage, compose};
+pub use reply::{ReplyMode, derive_forward, derive_reply};

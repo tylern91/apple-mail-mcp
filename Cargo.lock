@@ -62,6 +62,7 @@ name = "amx-compose"
 version = "0.3.0"
 dependencies = [
  "amx-core",
+ "amx-parse",
  "gethostname",
  "mail-builder",
 ]

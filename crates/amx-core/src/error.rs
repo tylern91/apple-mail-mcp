@@ -158,6 +158,13 @@ pub enum AmxError {
     #[error("cannot compose message: {reason}")]
     ComposeInvalid { reason: String },
 
+    #[error("cannot derive {mode} for message {rowid}: {reason}")]
+    ReplyDerivationFailed {
+        rowid: i64,
+        mode: &'static str,
+        reason: String,
+    },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 
