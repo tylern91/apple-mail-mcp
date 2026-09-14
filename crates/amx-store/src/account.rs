@@ -28,6 +28,14 @@ pub struct SendingSettings {
     pub ssl_enabled: bool,
 }
 
+/// The IMAP endpoint an account is read/appended through — used by `amx-send`'s Sent/Drafts
+/// filing (D2), never by the read lane (which reads `.emlx` files directly, not IMAP).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivingSettings {
+    pub hostname: String,
+    pub port: u16,
+}
+
 pub struct AccountResolver {
     conn: RoConnection,
 }
@@ -207,6 +215,63 @@ impl AccountResolver {
     fn fallback_smtp_hostname(kind: Option<AccountKind>) -> Option<String> {
         match kind {
             Some(AccountKind::ICloud) => Some("smtp.mail.me.com".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Resolves `identifier`'s IMAP endpoint, used by `amx-send`'s Sent/Drafts filing (D2). Unlike
+    /// [`Self::sending_settings`] there is no `SendingAccountIdentifier` hop — `identifier` *is*
+    /// the IMAP account, so `Hostname`/`PortNumber` are read directly off its own row.
+    ///
+    /// Confirmed live: iCloud's IMAP account row has no `Hostname` property at all (only
+    /// `UseMailDrop`, per [`Self::has_mail_drop`]'s doc comment) — Mail hardcodes
+    /// `imap.mail.me.com` for it instead of storing it. That gap is filled the same way as
+    /// `sending_settings`'s: a known-provider fallback table, erroring only when neither the
+    /// store nor the fallback has an answer.
+    ///
+    /// Returns `Ok(None)` if `identifier` doesn't resolve to an account.
+    pub fn receiving_settings(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<ReceivingSettings>, AmxError> {
+        let conn = self.conn.as_connection();
+        let account_pk: Option<i64> = conn
+            .query_row(
+                "SELECT Z_PK FROM ZACCOUNT WHERE ZIDENTIFIER = ?1",
+                [identifier],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(account_pk) = account_pk else {
+            return Ok(None);
+        };
+
+        let hostname = match self.keyed_archiver_string(account_pk, "Hostname")? {
+            Some(hostname) => hostname,
+            None => {
+                let kind = self.resolve(identifier)?.and_then(|account| account.kind);
+                Self::fallback_imap_hostname(kind).ok_or_else(|| {
+                    AmxError::ReceivingSettingsUnresolvable {
+                        identifier: identifier.to_string(),
+                        reason: "no Hostname stored for this account, and no known-provider \
+                                 fallback applies to this account kind"
+                            .to_string(),
+                    }
+                })?
+            }
+        };
+
+        let port = self
+            .keyed_archiver_integer(account_pk, "PortNumber")?
+            .and_then(|port| u16::try_from(port).ok())
+            .unwrap_or(993);
+
+        Ok(Some(ReceivingSettings { hostname, port }))
+    }
+
+    fn fallback_imap_hostname(kind: Option<AccountKind>) -> Option<String> {
+        match kind {
+            Some(AccountKind::ICloud) => Some("imap.mail.me.com".to_string()),
             _ => None,
         }
     }
@@ -469,6 +534,57 @@ mod tests {
         seed_accounts_db(file.path());
         let resolver = AccountResolver::open(file.path()).unwrap();
         assert_eq!(resolver.resolve("NOT-A-REAL-UUID").unwrap(), None);
+    }
+
+    /// Fills in a real `Hostname`/`PortNumber` for the Gmail IMAP account row (`Z_PK` 20)
+    /// itself — `seed_accounts_db` only reserves the `Hostname` key with a `NULL` `ZVALUE`
+    /// there, which is what a receive-only property row with no answer looks like; this backfills
+    /// it to exercise the store-resolves-directly path.
+    fn seed_receiving_settings(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "UPDATE ZACCOUNTPROPERTY SET ZVALUE = ?1 WHERE Z_PK = 200",
+            [keyed_archiver_blob(ns_mutable_string("imap.gmail.com"))],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY, ZVALUE) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                201,
+                20,
+                "PortNumber",
+                keyed_archiver_blob(plist::Value::Integer(993.into())),
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn gmail_receiving_settings_resolve_from_the_store_directly() {
+        let file = NamedTempFile::new().unwrap();
+        seed_accounts_db(file.path());
+        seed_receiving_settings(file.path());
+        let resolver = AccountResolver::open(file.path()).unwrap();
+        let settings = resolver
+            .receiving_settings("GMAIL-UUID")
+            .unwrap()
+            .expect("gmail should resolve receiving settings");
+        assert_eq!(settings.hostname, "imap.gmail.com");
+        assert_eq!(settings.port, 993);
+    }
+
+    #[test]
+    fn icloud_receiving_settings_fall_back_to_the_known_provider_table() {
+        let file = NamedTempFile::new().unwrap();
+        seed_accounts_db(file.path());
+        let resolver = AccountResolver::open(file.path()).unwrap();
+        let settings = resolver
+            .receiving_settings("ICLOUD-UUID")
+            .unwrap()
+            .expect("icloud's missing Hostname should fall back, not error");
+        assert_eq!(settings.hostname, "imap.mail.me.com");
+        // PortNumber was never seeded for the iCloud account row — falls back to 993.
+        assert_eq!(settings.port, 993);
     }
 
     #[test]

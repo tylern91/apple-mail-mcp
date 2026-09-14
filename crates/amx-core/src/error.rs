@@ -177,6 +177,9 @@ pub enum AmxError {
     #[error("could not resolve SMTP sending settings for account {identifier}: {reason}")]
     SendingSettingsUnresolvable { identifier: String, reason: String },
 
+    #[error("could not resolve IMAP receiving settings for account {identifier}: {reason}")]
+    ReceivingSettingsUnresolvable { identifier: String, reason: String },
+
     #[error("could not submit message to {hostname}:{port}: {reason}")]
     SmtpSubmissionFailed {
         hostname: String,
