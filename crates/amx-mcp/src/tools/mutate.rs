@@ -349,7 +349,11 @@ fn wait_for_relocated_rowid(
         }
 
         if Instant::now() >= deadline {
-            return Ok(old_rowid);
+            return Err(AmxError::MutationVerificationFailed {
+                rowid: old_rowid,
+                expected: "old rowid gone from the envelope index after a relocate".to_string(),
+                observed: "old rowid still present after the settle budget".to_string(),
+            });
         }
         thread::sleep(RELOCATE_POLL_INTERVAL);
     }
