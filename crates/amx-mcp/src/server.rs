@@ -6,6 +6,7 @@
 //! serialize through a `Mutex` around each. `MailboxRegistry` is a plain in-memory snapshot and
 //! `IndexReaderPool`/tantivy's `Searcher` are already safe to share, so neither is locked.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -31,9 +32,10 @@ use crate::schema::{Coverage, Envelope, SearchEnvelope};
 use crate::tool_lane::{ToolDescriptor, ToolLane, visible_tools};
 use crate::tools;
 
-/// The read/diagnostic tool catalog backing `tools/list`'s `ToolLane` filter. The send lane
-/// (Phase 5) is appended by [`catalog`] only on macOS, where `amx-send` is buildable — the Linux
-/// portable-CI job builds `amx-mcp` without it (`rust.yml`'s `check-portable` job).
+/// The read/diagnostic tool catalog backing `tools/list`'s `ToolLane` filter. The mutate lane
+/// (Phase 4) and the send lane (Phase 5) are each appended by [`catalog`] only on macOS, where
+/// `amx-automation`/`amx-send` are buildable — the Linux portable-CI job builds `amx-mcp` without
+/// them (`rust.yml`'s `check-portable` job).
 const READ_CATALOG: &[ToolDescriptor] = &[
     ToolDescriptor {
         name: "search_messages",
@@ -107,6 +109,41 @@ const READ_CATALOG: &[ToolDescriptor] = &[
     },
 ];
 
+/// Mutate-lane tools, macOS-only since they call into `amx-automation`.
+#[cfg(target_os = "macos")]
+const MUTATE_CATALOG: &[ToolDescriptor] = &[
+    ToolDescriptor {
+        name: "set_read_state",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "set_flag",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "move_messages",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "trash_messages",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "triage_plan",
+        lane: ToolLane::Mutate,
+        read_only_hint: true,
+    },
+    ToolDescriptor {
+        name: "triage_apply",
+        lane: ToolLane::Mutate,
+        read_only_hint: false,
+    },
+];
+
 /// The send-lane catalog (Phase 5 task 6), macOS-only. Both carry `openWorldHint: true` (mail
 /// actually leaves the machine) — see the `#[tool]` annotations on `send_message`/`create_draft`.
 #[cfg(target_os = "macos")]
@@ -138,7 +175,10 @@ fn catalog() -> Vec<ToolDescriptor> {
     #[allow(unused_mut)]
     let mut all = READ_CATALOG.to_vec();
     #[cfg(target_os = "macos")]
-    all.extend_from_slice(SEND_CATALOG);
+    {
+        all.extend_from_slice(MUTATE_CATALOG);
+        all.extend_from_slice(SEND_CATALOG);
+    }
     all
 }
 
@@ -163,6 +203,13 @@ pub struct AppState {
     health: HealthMonitor,
     store_path: PathBuf,
     read_only: bool,
+    /// Raw `<cache_dir>/index` and `<cache_dir>/meta.sqlite` paths — kept alongside `index_pool`
+    /// (which owns a long-lived reader) so a mutate tool can open its own transient
+    /// [`amx_index::mutate::MutationWriter`] without re-deriving `Config`'s path convention.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    index_dir: PathBuf,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    meta_path: PathBuf,
 }
 
 impl AppState {
@@ -206,6 +253,8 @@ impl AppState {
             health,
             store_path,
             read_only: config.read_only,
+            index_dir,
+            meta_path,
         })
     }
 
@@ -252,6 +301,252 @@ impl AmxServer {
             &resolver,
             rowid,
         )
+    }
+
+    /// Applies one `triage_apply` item's operation against `writer` (already open, shared across
+    /// the whole batch per D3) without ever propagating an error out of the loop — a per-item
+    /// failure becomes its own `TriageItemOutcome::Failed` so the rest of the plan still runs.
+    #[cfg(target_os = "macos")]
+    async fn apply_triage_item(
+        &self,
+        writer: &mut amx_index::mutate::MutationWriter,
+        rowid: i64,
+        operation: &TriageOperation,
+    ) -> TriageItemOutcome {
+        match self.apply_triage_item_inner(writer, rowid, operation).await {
+            Ok(()) => TriageItemOutcome::Success,
+            Err(err) => TriageItemOutcome::Failed {
+                reason: err.to_string(),
+            },
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn apply_triage_item_inner(
+        &self,
+        writer: &mut amx_index::mutate::MutationWriter,
+        rowid: i64,
+        operation: &TriageOperation,
+    ) -> Result<(), AmxError> {
+        match operation {
+            TriageOperation::SetReadState { read } => {
+                let addressed = {
+                    let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                    let resolver = self
+                        .state
+                        .account_resolver
+                        .lock()
+                        .expect("account_resolver poisoned");
+                    tools::mutate::resolve_and_address(
+                        &conn,
+                        &self.state.mailbox_registry,
+                        &self.state.store_path,
+                        &resolver,
+                        rowid,
+                    )
+                }?;
+
+                amx_automation::locate::locate(
+                    addressed.mailbox.clone(),
+                    addressed.message_id.clone(),
+                    rowid,
+                )
+                .await?;
+                amx_automation::jxa::run(&amx_automation::JxaRequest::SetReadState {
+                    mailbox: addressed.mailbox,
+                    message_id: addressed.message_id,
+                    read: *read,
+                })
+                .await?;
+
+                let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                let resolver = self
+                    .state
+                    .account_resolver
+                    .lock()
+                    .expect("account_resolver poisoned");
+                let updated = tools::mutate::reindex_with_writer(
+                    writer,
+                    &conn,
+                    &self.state.mailbox_registry,
+                    &self.state.store_path,
+                    &resolver,
+                    rowid,
+                )?;
+                if updated.row.read != *read {
+                    return Err(AmxError::MutationVerificationFailed {
+                        rowid,
+                        expected: read.to_string(),
+                        observed: updated.row.read.to_string(),
+                    });
+                }
+                Ok(())
+            }
+            TriageOperation::SetFlag { flagged } => {
+                let addressed = {
+                    let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                    let resolver = self
+                        .state
+                        .account_resolver
+                        .lock()
+                        .expect("account_resolver poisoned");
+                    tools::mutate::resolve_and_address(
+                        &conn,
+                        &self.state.mailbox_registry,
+                        &self.state.store_path,
+                        &resolver,
+                        rowid,
+                    )
+                }?;
+
+                amx_automation::locate::locate(
+                    addressed.mailbox.clone(),
+                    addressed.message_id.clone(),
+                    rowid,
+                )
+                .await?;
+                amx_automation::jxa::run(&amx_automation::JxaRequest::SetFlag {
+                    mailbox: addressed.mailbox,
+                    message_id: addressed.message_id,
+                    flagged: *flagged,
+                })
+                .await?;
+
+                let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                let resolver = self
+                    .state
+                    .account_resolver
+                    .lock()
+                    .expect("account_resolver poisoned");
+                let updated = tools::mutate::reindex_with_writer(
+                    writer,
+                    &conn,
+                    &self.state.mailbox_registry,
+                    &self.state.store_path,
+                    &resolver,
+                    rowid,
+                )?;
+                if updated.row.flagged != *flagged {
+                    return Err(AmxError::MutationVerificationFailed {
+                        rowid,
+                        expected: flagged.to_string(),
+                        observed: updated.row.flagged.to_string(),
+                    });
+                }
+                Ok(())
+            }
+            TriageOperation::Move {
+                destination_mailbox,
+            } => {
+                let (addressed, destination, snapshot_account_id, before) = {
+                    let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                    let resolver = self
+                        .state
+                        .account_resolver
+                        .lock()
+                        .expect("account_resolver poisoned");
+                    let (destination, snapshot_account_id) = tools::mutate::resolve_destination(
+                        &self.state.mailbox_registry,
+                        &resolver,
+                        destination_mailbox,
+                    )?;
+                    let prep = tools::mutate::prepare_relocate(
+                        &conn,
+                        &self.state.mailbox_registry,
+                        &self.state.store_path,
+                        &resolver,
+                        rowid,
+                        Some(&snapshot_account_id),
+                    )?;
+                    (
+                        prep.addressed,
+                        destination,
+                        prep.snapshot_account_id,
+                        prep.before,
+                    )
+                };
+
+                amx_automation::locate::locate(
+                    addressed.mailbox.clone(),
+                    addressed.message_id.clone(),
+                    rowid,
+                )
+                .await?;
+                amx_automation::jxa::run(&amx_automation::JxaRequest::Move {
+                    mailbox: addressed.mailbox,
+                    message_id: addressed.message_id,
+                    destination,
+                })
+                .await?;
+
+                let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                let resolver = self
+                    .state
+                    .account_resolver
+                    .lock()
+                    .expect("account_resolver poisoned");
+                tools::mutate::finish_relocate_with_writer(
+                    writer,
+                    &conn,
+                    &self.state.mailbox_registry,
+                    &self.state.store_path,
+                    &resolver,
+                    rowid,
+                    &snapshot_account_id,
+                    &before,
+                )?;
+                Ok(())
+            }
+            TriageOperation::Trash => {
+                let (addressed, snapshot_account_id, before) = {
+                    let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                    let resolver = self
+                        .state
+                        .account_resolver
+                        .lock()
+                        .expect("account_resolver poisoned");
+                    let prep = tools::mutate::prepare_relocate(
+                        &conn,
+                        &self.state.mailbox_registry,
+                        &self.state.store_path,
+                        &resolver,
+                        rowid,
+                        None,
+                    )?;
+                    (prep.addressed, prep.snapshot_account_id, prep.before)
+                };
+
+                amx_automation::locate::locate(
+                    addressed.mailbox.clone(),
+                    addressed.message_id.clone(),
+                    rowid,
+                )
+                .await?;
+                amx_automation::jxa::run(&amx_automation::JxaRequest::Trash {
+                    mailbox: addressed.mailbox,
+                    message_id: addressed.message_id,
+                })
+                .await?;
+
+                let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+                let resolver = self
+                    .state
+                    .account_resolver
+                    .lock()
+                    .expect("account_resolver poisoned");
+                tools::mutate::finish_relocate_with_writer(
+                    writer,
+                    &conn,
+                    &self.state.mailbox_registry,
+                    &self.state.store_path,
+                    &resolver,
+                    rowid,
+                    &snapshot_account_id,
+                    &before,
+                )?;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -435,6 +730,355 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "set_read_state",
+        description = "Mark a message read or unread in Mail.app, keeping the search index in sync.",
+        annotations(read_only_hint = false)
+    )]
+    pub async fn set_read_state(
+        &self,
+        params: Parameters<SetReadStateRequest>,
+    ) -> Result<Json<Envelope<SetReadStateResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+        let read = params.0.read;
+
+        let addressed = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::resolve_and_address(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+            )
+        }
+        .map_err(to_error_data)?;
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::SetReadState {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+            read,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_set_read_state(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                read,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "set_flag",
+        description = "Flag or unflag a message in Mail.app, keeping the search index in sync.",
+        annotations(read_only_hint = false)
+    )]
+    pub async fn set_flag(
+        &self,
+        params: Parameters<SetFlagRequest>,
+    ) -> Result<Json<Envelope<SetFlagResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+        let flagged = params.0.flagged;
+
+        let addressed = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::resolve_and_address(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+            )
+        }
+        .map_err(to_error_data)?;
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::SetFlag {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+            flagged,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_set_flag(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                flagged,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "move_messages",
+        description = "Move a message to another mailbox in Mail.app, keeping the search index in sync.",
+        annotations(read_only_hint = false)
+    )]
+    pub async fn move_messages(
+        &self,
+        params: Parameters<MoveMessagesRequest>,
+    ) -> Result<Json<Envelope<MoveMessagesResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+        let destination_mailbox = params.0.destination_mailbox;
+
+        let (addressed, destination, snapshot_account_id, before) = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            let (destination, snapshot_account_id) = tools::mutate::resolve_destination(
+                &self.state.mailbox_registry,
+                &resolver,
+                &destination_mailbox,
+            )
+            .map_err(to_error_data)?;
+            let prep = tools::mutate::prepare_relocate(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+                Some(&snapshot_account_id),
+            )
+            .map_err(to_error_data)?;
+            (
+                prep.addressed,
+                destination,
+                prep.snapshot_account_id,
+                prep.before,
+            )
+        };
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::Move {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+            destination,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_move(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                &snapshot_account_id,
+                &before,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "trash_messages",
+        description = "Move a message to Mail.app's Trash mailbox, keeping the search index in sync. Never permanently erases.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    pub async fn trash_messages(
+        &self,
+        params: Parameters<TrashMessagesRequest>,
+    ) -> Result<Json<Envelope<TrashMessagesResponse>>, ErrorData> {
+        let rowid = params.0.rowid;
+
+        let (addressed, snapshot_account_id, before) = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            let prep = tools::mutate::prepare_relocate(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                rowid,
+                None,
+            )
+            .map_err(to_error_data)?;
+            (prep.addressed, prep.snapshot_account_id, prep.before)
+        };
+
+        amx_automation::locate::locate(
+            addressed.mailbox.clone(),
+            addressed.message_id.clone(),
+            rowid,
+        )
+        .await
+        .map_err(to_error_data)?;
+        amx_automation::jxa::run(&amx_automation::JxaRequest::Trash {
+            mailbox: addressed.mailbox,
+            message_id: addressed.message_id,
+        })
+        .await
+        .map_err(to_error_data)?;
+
+        let response = {
+            let conn = self.state.store_conn.lock().expect("store_conn poisoned");
+            let resolver = self
+                .state
+                .account_resolver
+                .lock()
+                .expect("account_resolver poisoned");
+            tools::mutate::finish_trash(
+                &conn,
+                &self.state.mailbox_registry,
+                &self.state.store_path,
+                &resolver,
+                &self.state.index_dir,
+                &self.state.meta_path,
+                rowid,
+                &snapshot_account_id,
+                &before,
+            )
+        }
+        .map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "triage_plan",
+        description = "Freeze an ordered rowid list and an operation into a content-addressed plan for triage_apply. Touches nothing.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn triage_plan(
+        &self,
+        params: Parameters<TriagePlanRequest>,
+    ) -> Result<Json<Envelope<TriagePlanResponse>>, ErrorData> {
+        let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
+        let response = tools::run_triage_plan(&meta_conn, params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "triage_apply",
+        description = "Apply a frozen triage_plan by hash, optionally excluding items, through one writer acquisition and one commit for the whole batch.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    pub async fn triage_apply(
+        &self,
+        params: Parameters<TriageApplyRequest>,
+    ) -> Result<Json<Envelope<TriageApplyResponse>>, ErrorData> {
+        let plan_hash = params.0.plan_hash;
+        let exclude: HashSet<i64> = params.0.exclude.into_iter().collect();
+
+        let (rowids, operation) = {
+            let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
+            tools::load_plan(&meta_conn, &plan_hash)
+        }
+        .map_err(to_error_data)?;
+
+        let mut writer =
+            amx_index::mutate::MutationWriter::open(&self.state.index_dir, &self.state.meta_path)
+                .map_err(to_error_data)?;
+
+        let mut results = Vec::with_capacity(rowids.len());
+        for rowid in rowids {
+            let outcome = if exclude.contains(&rowid) {
+                TriageItemOutcome::Skipped {
+                    reason: "excluded".to_string(),
+                }
+            } else {
+                self.apply_triage_item(&mut writer, rowid, &operation).await
+            };
+            results.push(TriageItemResult { rowid, outcome });
+        }
+
+        writer.commit().map_err(to_error_data)?;
+        self.state.index_pool.reload().map_err(to_error_data)?;
+
+        Ok(Json(
+            self.envelope(TriageApplyResponse { plan_hash, results }),
+        ))
+    }
+
     #[tool(
         name = "doctor",
         description = "Full readiness screen: access, accounts, mailboxes, coverage, writer/quarantine state."
@@ -597,5 +1241,55 @@ mod tests {
             );
         }
         assert_eq!(registered.len(), catalog.len());
+    }
+
+    /// Phase 4 task 9: every mutate-lane tool (the 6 registered under `ToolLane::Mutate`,
+    /// `triage_apply` included) must vanish from `tools/list` under `AMX_READ_ONLY=1`, while every
+    /// read/diagnostic tool stays visible. Exercises the real `catalog()` this server registers,
+    /// not a synthetic one — `tool_lane.rs`'s own tests already cover `visible_tools`'s filtering
+    /// logic in isolation, so this test only needs to confirm this catalog is wired to it correctly.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn read_only_hides_every_mutate_tool_from_the_real_catalog() {
+        let catalog = catalog();
+        let mutate_names: std::collections::HashSet<_> = catalog
+            .iter()
+            .filter(|d| matches!(d.lane, ToolLane::Mutate))
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(
+            mutate_names,
+            std::collections::HashSet::from([
+                "set_read_state",
+                "set_flag",
+                "move_messages",
+                "trash_messages",
+                "triage_plan",
+                "triage_apply",
+            ])
+        );
+
+        let visible_when_read_only: std::collections::HashSet<_> = visible_tools(&catalog, true)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        for name in &mutate_names {
+            assert!(
+                !visible_when_read_only.contains(name),
+                "{name} must not be visible under AMX_READ_ONLY"
+            );
+        }
+
+        let visible_normally: std::collections::HashSet<_> = visible_tools(&catalog, false)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        for name in &mutate_names {
+            assert!(
+                visible_normally.contains(name),
+                "{name} must be visible when read-only is off"
+            );
+        }
+        assert_eq!(visible_normally.len(), catalog.len());
     }
 }

@@ -38,6 +38,13 @@ impl MailboxPathResolver {
     pub fn account_identifier(mailbox_url: &str) -> Result<String, AmxError> {
         split_url(mailbox_url).map(|(account, _)| account)
     }
+
+    /// The mailbox's decoded, NFD-normalized folder-name path (e.g. `["[Gmail]", "Tất cả thư"]`)
+    /// — the same segments used to build the on-disk `.mbox` chain in [`Self::resolve`], and the
+    /// identity `amx-automation` uses to walk Mail.app's JXA `mailboxes` tree by name.
+    pub fn segments(mailbox_url: &str) -> Result<Vec<String>, AmxError> {
+        split_url(mailbox_url).map(|(_, segments)| segments)
+    }
 }
 
 /// Splits `scheme://account/seg1/seg2` into `(account, [seg1, seg2])`, percent-decoding and

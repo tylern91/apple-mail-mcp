@@ -2,13 +2,14 @@
 //!
 //! `X-Apple-Content-Length` (present only on the minority of messages Mail.app has pruned
 //! attachment bytes from) declares the full RFC 822 message size *as originally downloaded*. When
-//! the on-disk message is shorter than that, the attachment bytes were never fetched — verified
-//! against the live store's ROWID 42191 (`.partial.emlx`, 221,547 bytes on disk vs. 436,056
-//! declared): its two attachment parts carry `Content-Disposition: ATTACHMENT` headers (case
-//! matters here only because a first pass grepped case-sensitively and wrongly read that as zero
-//! attachment parts) but no attachment body bytes, while both PDFs the DB lists are recovered
-//! separately as extracted files under the mailbox's `Attachments/42191/` directory — a location
-//! this oracle does not consult, since it is scoped to what the `.emlx` file itself contains.
+//! the on-disk message is shorter than that, the attachment bytes were never fetched. This oracle
+//! only reads the header from the message's *top-level* headers (`Message::header()`) — a
+//! `X-Apple-Content-Length` string found elsewhere, e.g. inside a nested MIME part's own headers,
+//! does not count and must not be matched by tooling that inspects `.emlx` files by other means
+//! (grep over the whole file will produce false positives from nested parts). Verified live via a
+//! synthetic candidate (Phase 4 Task 10 check #3): a message with a genuine top-level
+//! `X-Apple-Content-Length` larger than its on-disk byte count classifies as `NotDownloaded`, and
+//! reverting the header reclassifies it correctly once re-parsed.
 
 use amx_core::coverage::AttachmentState;
 use mail_parser::Message;
