@@ -116,9 +116,11 @@ dependencies = [
 name = "amx-mcp"
 version = "0.3.0"
 dependencies = [
+ "amx-compose",
  "amx-core",
  "amx-index",
  "amx-parse",
+ "amx-send",
  "amx-store",
  "axum",
  "base64 0.22.1",
