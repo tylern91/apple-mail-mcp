@@ -174,6 +174,19 @@ pub enum AmxError {
     #[error("OAuth flow failed: {reason}")]
     OAuthFlowFailed { reason: String },
 
+    #[error("could not resolve SMTP sending settings for account {identifier}: {reason}")]
+    SendingSettingsUnresolvable { identifier: String, reason: String },
+
+    #[error("could not submit message to {hostname}:{port}: {reason}")]
+    SmtpSubmissionFailed {
+        hostname: String,
+        port: u16,
+        reason: String,
+    },
+
+    #[error("could not file message to the {mailbox} mailbox via IMAP APPEND: {reason}")]
+    ImapAppendFailed { mailbox: String, reason: String },
+
     #[error(transparent)]
     Parse(#[from] ParseError),
 

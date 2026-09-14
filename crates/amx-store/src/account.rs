@@ -20,6 +20,14 @@ pub struct ResolvedAccount {
     pub kind: Option<AccountKind>,
 }
 
+/// The SMTP endpoint and credential mechanism an account submits outbound mail through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendingSettings {
+    pub hostname: String,
+    pub port: u16,
+    pub ssl_enabled: bool,
+}
+
 pub struct AccountResolver {
     conn: RoConnection,
 }
@@ -122,6 +130,135 @@ impl AccountResolver {
         })
     }
 
+    /// Resolves `identifier`'s outbound SMTP settings by following its `SendingAccountIdentifier`
+    /// property to a second `ZACCOUNT` row (the SMTP account) and reading that row's `Hostname` /
+    /// `PortNumber` / `SSLEnabled` properties.
+    ///
+    /// Those three properties are NSKeyedArchiver-encoded plists, not plain SQLite columns —
+    /// decoded via [`Self::keyed_archiver_string`]/[`Self::keyed_archiver_integer`]/
+    /// [`Self::keyed_archiver_bool`]. iCloud's stored `Hostname` is a non-string archived value
+    /// (observed live: an archived integer `1`, not a hostname) — when the decoded hostname isn't
+    /// a string, this falls back to a known-provider table keyed on [`AccountKind`] rather than
+    /// erroring, and only errors when neither the store nor the fallback table has an answer.
+    ///
+    /// Returns `Ok(None)` if `identifier` doesn't resolve to an account, or the account has no
+    /// `SendingAccountIdentifier` at all (e.g. a receive-only or local account).
+    pub fn sending_settings(&self, identifier: &str) -> Result<Option<SendingSettings>, AmxError> {
+        let conn = self.conn.as_connection();
+        let account_pk: Option<i64> = conn
+            .query_row(
+                "SELECT Z_PK FROM ZACCOUNT WHERE ZIDENTIFIER = ?1",
+                [identifier],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(account_pk) = account_pk else {
+            return Ok(None);
+        };
+
+        let sending_identifier =
+            self.keyed_archiver_string(account_pk, "SendingAccountIdentifier")?;
+        let Some(sending_identifier) = sending_identifier else {
+            return Ok(None);
+        };
+
+        let smtp_pk: Option<i64> = conn
+            .query_row(
+                "SELECT Z_PK FROM ZACCOUNT WHERE ZIDENTIFIER = ?1",
+                [&sending_identifier],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(smtp_pk) = smtp_pk else {
+            return Ok(None);
+        };
+
+        let hostname = match self.keyed_archiver_string(smtp_pk, "Hostname")? {
+            Some(hostname) => hostname,
+            None => {
+                let kind = self.resolve(identifier)?.and_then(|account| account.kind);
+                Self::fallback_smtp_hostname(kind).ok_or_else(|| {
+                    AmxError::SendingSettingsUnresolvable {
+                        identifier: identifier.to_string(),
+                        reason: "stored Hostname is not a string, and no known-provider fallback \
+                                 applies to this account kind"
+                            .to_string(),
+                    }
+                })?
+            }
+        };
+
+        let port = self
+            .keyed_archiver_integer(smtp_pk, "PortNumber")?
+            .and_then(|port| u16::try_from(port).ok())
+            .unwrap_or(587);
+        let ssl_enabled = self
+            .keyed_archiver_bool(smtp_pk, "SSLEnabled")?
+            .unwrap_or(true);
+
+        Ok(Some(SendingSettings {
+            hostname,
+            port,
+            ssl_enabled,
+        }))
+    }
+
+    fn fallback_smtp_hostname(kind: Option<AccountKind>) -> Option<String> {
+        match kind {
+            Some(AccountKind::ICloud) => Some("smtp.mail.me.com".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Reads `ZKEY = key`'s `ZVALUE` for `owner_pk`, decodes it as an NSKeyedArchiver plist, and
+    /// returns the archive's root object (`$objects[1]` — `$objects[0]` is always `$null`).
+    fn keyed_archiver_root(
+        &self,
+        owner_pk: i64,
+        key: &str,
+    ) -> Result<Option<plist::Value>, AmxError> {
+        let raw: Option<Vec<u8>> = self
+            .conn
+            .as_connection()
+            .query_row(
+                "SELECT ZVALUE FROM ZACCOUNTPROPERTY WHERE ZOWNER = ?1 AND ZKEY = ?2",
+                rusqlite::params![owner_pk, key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let Ok(archive) = plist::Value::from_reader(std::io::Cursor::new(raw)) else {
+            return Ok(None);
+        };
+        let root = archive
+            .as_dictionary()
+            .and_then(|dict| dict.get("$objects"))
+            .and_then(|objects| objects.as_array())
+            .and_then(|objects| objects.get(1))
+            .cloned();
+        Ok(root)
+    }
+
+    fn keyed_archiver_string(&self, owner_pk: i64, key: &str) -> Result<Option<String>, AmxError> {
+        Ok(self
+            .keyed_archiver_root(owner_pk, key)?
+            .and_then(|value| value.into_string()))
+    }
+
+    fn keyed_archiver_integer(&self, owner_pk: i64, key: &str) -> Result<Option<i64>, AmxError> {
+        Ok(self
+            .keyed_archiver_root(owner_pk, key)?
+            .and_then(|value| value.as_signed_integer()))
+    }
+
+    fn keyed_archiver_bool(&self, owner_pk: i64, key: &str) -> Result<Option<bool>, AmxError> {
+        Ok(self
+            .keyed_archiver_root(owner_pk, key)?
+            .and_then(|value| value.as_boolean()))
+    }
+
     /// `UseMailDrop` is set only on iCloud Mail accounts among the IMAP-typed rows — verified
     /// against a live store: three Gmail IMAP accounts carry a `Hostname` property and no
     /// `UseMailDrop`; the iCloud account carries `UseMailDrop` and no `Hostname` (Mail hardcodes
@@ -161,21 +298,102 @@ mod tests {
                 ZUSERNAME TEXT,
                 ZACCOUNTTYPE INTEGER
             );
-            CREATE TABLE ZACCOUNTPROPERTY (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZKEY TEXT);
+            CREATE TABLE ZACCOUNTPROPERTY (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZKEY TEXT, ZVALUE BLOB);
 
             INSERT INTO ZACCOUNTTYPE VALUES (1, 'com.apple.account.IMAP');
             INSERT INTO ZACCOUNTTYPE VALUES (2, 'com.apple.account.Exchange');
             INSERT INTO ZACCOUNTTYPE VALUES (3, 'com.apple.account.LocalOnMyMac');
+            INSERT INTO ZACCOUNTTYPE VALUES (4, 'com.apple.account.SMTP');
 
             INSERT INTO ZACCOUNT VALUES (10, 'ICLOUD-UUID', NULL, NULL, 1);
-            INSERT INTO ZACCOUNTPROPERTY VALUES (100, 10, 'UseMailDrop');
+            INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY) VALUES (100, 10, 'UseMailDrop');
 
             INSERT INTO ZACCOUNT VALUES (20, 'GMAIL-UUID', NULL, NULL, 1);
-            INSERT INTO ZACCOUNTPROPERTY VALUES (200, 20, 'Hostname');
+            INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY) VALUES (200, 20, 'Hostname');
 
             INSERT INTO ZACCOUNT VALUES (30, 'EXCHANGE-UUID', 'Work Exchange', NULL, 2);
             INSERT INTO ZACCOUNT VALUES (40, 'LOCAL-UUID', 'On My Mac', NULL, 3);
             "#,
+        )
+        .unwrap();
+    }
+
+    /// Encodes `value` the way this fixture stands in for an NSKeyedArchiver-serialized
+    /// `ZVALUE`: a `$objects` array whose index 0 is always `$null` and whose index 1 is the
+    /// archive's root object — the shape [`AccountResolver::keyed_archiver_root`] expects.
+    fn keyed_archiver_blob(value: plist::Value) -> Vec<u8> {
+        let mut objects = plist::Dictionary::new();
+        objects.insert(
+            "$objects".to_string(),
+            plist::Value::Array(vec![plist::Value::String("$null".to_string()), value]),
+        );
+        let archive = plist::Value::Dictionary(objects);
+        let mut bytes = Vec::new();
+        archive.to_writer_binary(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn seed_sending_settings(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY, ZVALUE) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                300,
+                20,
+                "SendingAccountIdentifier",
+                keyed_archiver_blob(plist::Value::String("GMAIL-SMTP-UUID".to_string())),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNT VALUES (21, 'GMAIL-SMTP-UUID', NULL, NULL, 4)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY, ZVALUE) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                301,
+                21,
+                "Hostname",
+                keyed_archiver_blob(plist::Value::String("smtp.gmail.com".to_string())),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY, ZVALUE) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                302,
+                21,
+                "PortNumber",
+                keyed_archiver_blob(plist::Value::Integer(587.into())),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY, ZVALUE) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                310,
+                10,
+                "SendingAccountIdentifier",
+                keyed_archiver_blob(plist::Value::String("ICLOUD-SMTP-UUID".to_string())),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNT VALUES (11, 'ICLOUD-SMTP-UUID', NULL, NULL, 4)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZACCOUNTPROPERTY (Z_PK, ZOWNER, ZKEY, ZVALUE) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                311,
+                11,
+                "Hostname",
+                keyed_archiver_blob(plist::Value::Integer(1.into())),
+            ],
         )
         .unwrap();
     }
@@ -223,5 +441,51 @@ mod tests {
         seed_accounts_db(file.path());
         let resolver = AccountResolver::open(file.path()).unwrap();
         assert_eq!(resolver.resolve("NOT-A-REAL-UUID").unwrap(), None);
+    }
+
+    #[test]
+    fn gmail_sending_settings_resolve_from_the_store_directly() {
+        let file = NamedTempFile::new().unwrap();
+        seed_accounts_db(file.path());
+        seed_sending_settings(file.path());
+        let resolver = AccountResolver::open(file.path()).unwrap();
+        let settings = resolver
+            .sending_settings("GMAIL-UUID")
+            .unwrap()
+            .expect("gmail should resolve sending settings");
+        assert_eq!(settings.hostname, "smtp.gmail.com");
+        assert_eq!(settings.port, 587);
+    }
+
+    #[test]
+    fn icloud_sending_settings_fall_back_to_the_known_provider_table() {
+        let file = NamedTempFile::new().unwrap();
+        seed_accounts_db(file.path());
+        seed_sending_settings(file.path());
+        let resolver = AccountResolver::open(file.path()).unwrap();
+        let settings = resolver
+            .sending_settings("ICLOUD-UUID")
+            .unwrap()
+            .expect("icloud's junk Hostname should fall back, not error");
+        assert_eq!(settings.hostname, "smtp.mail.me.com");
+        // PortNumber was never seeded for the iCloud SMTP row — falls back to 587.
+        assert_eq!(settings.port, 587);
+        assert!(settings.ssl_enabled);
+    }
+
+    #[test]
+    fn account_with_no_sending_identifier_resolves_to_none() {
+        let file = NamedTempFile::new().unwrap();
+        seed_accounts_db(file.path());
+        let resolver = AccountResolver::open(file.path()).unwrap();
+        assert_eq!(resolver.sending_settings("EXCHANGE-UUID").unwrap(), None);
+    }
+
+    #[test]
+    fn unresolvable_account_returns_none() {
+        let file = NamedTempFile::new().unwrap();
+        seed_accounts_db(file.path());
+        let resolver = AccountResolver::open(file.path()).unwrap();
+        assert_eq!(resolver.sending_settings("NOT-A-REAL-UUID").unwrap(), None);
     }
 }
