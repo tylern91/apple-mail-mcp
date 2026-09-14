@@ -10,7 +10,9 @@
 //! (`imap.gmail.com`/`smtp.gmail.com`), since `AccountKind` has no distinct Gmail variant: Gmail's
 //! Mail.app account type is the same `com.apple.account.IMAP` as any other IMAP provider.
 
-use amx_compose::{Draft, EmailAddress, compose};
+use amx_compose::{
+    ComposedMessage, Draft, EmailAddress, ReplyMode, compose, derive_forward, derive_reply,
+};
 use amx_core::AmxError;
 use amx_send::{
     CredentialBroker, ImapEndpoint, Provider, SendingEndpoint, SpecialUse, append_to_special_use,
@@ -18,8 +20,10 @@ use amx_send::{
 };
 use amx_store::account::AccountResolver;
 
+use super::pipeline::ResolvedMessage;
 use crate::schema::tools::{
-    CreateDraftRequest, CreateDraftResponse, SendMessageRequest, SendMessageResponse,
+    CreateDraftRequest, CreateDraftResponse, ForwardMessageRequest, ForwardMessageResponse,
+    ReplyMessageRequest, ReplyMessageResponse, SendMessageRequest, SendMessageResponse,
 };
 
 fn is_gmail_hostname(hostname: &str) -> bool {
@@ -70,13 +74,71 @@ fn build_draft(
     }
 }
 
-/// Submits `request` over SMTP, then — unless `from` resolves to a Gmail account (D2) — files a
-/// copy into the Sent mailbox via IMAP `APPEND`.
+/// The outcome of [`submit_and_file`] — shared by `send_message`, `reply_message`, and
+/// `forward_message`, since all three submit over SMTP and then attempt the same Sent-mailbox
+/// filing.
+struct Submission {
+    message_id: String,
+    filed_to_sent: bool,
+    filing_error: Option<String>,
+}
+
+/// Submits `composed` over `from`'s own SMTP endpoint, then — unless `from` resolves to a Gmail
+/// account (D2) — files a copy into the Sent mailbox via IMAP `APPEND`.
 ///
 /// A failed submission is a hard error. A failed *filing* after a successful submission is not:
-/// the mail already left, so `response.filing_error` reports it as a partial success rather than
-/// looking identical to a full success (the parasxos #3 guard, extended to the filing step —
-/// task 5's Results section).
+/// the mail already left, so the result reports it as a partial success rather than looking
+/// identical to a full success (the parasxos #3 guard, extended to the filing step — task 5's
+/// Results section).
+fn submit_and_file(
+    account_resolver: &AccountResolver,
+    from: &str,
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
+    composed: &ComposedMessage,
+) -> Result<Submission, AmxError> {
+    let identifier = resolve_identifier(account_resolver, from)?;
+    let sending = account_resolver
+        .sending_settings(&identifier)?
+        .ok_or_else(|| AmxError::SendingSettingsUnresolvable {
+            identifier: identifier.clone(),
+            reason: "account resolved but has no sending settings".to_string(),
+        })?;
+
+    let is_gmail = is_gmail_hostname(&sending.hostname);
+    let credential = CredentialBroker::for_account(from, provider_for_hostname(&sending.hostname))?;
+
+    let endpoint = SendingEndpoint {
+        hostname: sending.hostname,
+        port: sending.port,
+        ssl_enabled: sending.ssl_enabled,
+    };
+    submit(&endpoint, from, to, cc, bcc, &credential, &composed.raw)?;
+
+    let (filed_to_sent, filing_error) = if is_gmail {
+        (false, None)
+    } else {
+        match file_to_sent(
+            account_resolver,
+            &identifier,
+            from,
+            &credential,
+            &composed.raw,
+        ) {
+            Ok(()) => (true, None),
+            Err(err) => (false, Some(err.to_string())),
+        }
+    };
+
+    Ok(Submission {
+        message_id: composed.message_id.clone(),
+        filed_to_sent,
+        filing_error,
+    })
+}
+
+/// Composes `request` and submits it, per [`submit_and_file`].
 pub fn run_send_message(
     account_resolver: &AccountResolver,
     request: &SendMessageRequest,
@@ -91,53 +153,119 @@ pub fn run_send_message(
         &request.html_body,
     );
     let composed = compose(&draft)?;
-
-    let identifier = resolve_identifier(account_resolver, &request.from)?;
-    let sending = account_resolver
-        .sending_settings(&identifier)?
-        .ok_or_else(|| AmxError::SendingSettingsUnresolvable {
-            identifier: identifier.clone(),
-            reason: "account resolved but has no sending settings".to_string(),
-        })?;
-
-    let is_gmail = is_gmail_hostname(&sending.hostname);
-    let credential =
-        CredentialBroker::for_account(&request.from, provider_for_hostname(&sending.hostname))?;
-
-    let endpoint = SendingEndpoint {
-        hostname: sending.hostname,
-        port: sending.port,
-        ssl_enabled: sending.ssl_enabled,
-    };
-    submit(
-        &endpoint,
+    let submission = submit_and_file(
+        account_resolver,
         &request.from,
         &request.to,
         &request.cc,
         &request.bcc,
-        &credential,
-        &composed.raw,
+        &composed,
     )?;
 
-    let (filed_to_sent, filing_error) = if is_gmail {
-        (false, None)
-    } else {
-        match file_to_sent(
-            account_resolver,
-            &identifier,
-            &request.from,
-            &credential,
-            &composed.raw,
-        ) {
-            Ok(()) => (true, None),
-            Err(err) => (false, Some(err.to_string())),
-        }
-    };
-
     Ok(SendMessageResponse {
-        message_id: composed.message_id,
-        filed_to_sent,
-        filing_error,
+        message_id: submission.message_id,
+        filed_to_sent: submission.filed_to_sent,
+        filing_error: submission.filing_error,
+    })
+}
+
+/// Resolves `resolved`'s parsed source message, or a [`AmxError::ReplyDerivationFailed`] if its
+/// body was never indexed (quarantined, pending, or unavailable) — a reply/forward has nothing to
+/// derive from in that case, and this hard-errors rather than degrading (the parasxos #3 guard).
+fn require_parsed<'a>(
+    resolved: &'a ResolvedMessage,
+    mode: &'static str,
+) -> Result<&'a amx_parse::ParsedMessage, AmxError> {
+    resolved
+        .classified
+        .parsed
+        .as_ref()
+        .ok_or_else(|| AmxError::ReplyDerivationFailed {
+            rowid: resolved.row.rowid,
+            mode,
+            reason: "source message body was never indexed (quarantined, pending, or unavailable)"
+                .to_string(),
+        })
+}
+
+/// Derives a reply from the message `resolved` points at (per `request.reply_all`), then submits
+/// it per [`submit_and_file`]. `request.text_body`/`request.html_body`, when set, override
+/// `derive_reply`'s default body (a copy of the source message's own body).
+pub fn run_reply_message(
+    account_resolver: &AccountResolver,
+    resolved: &ResolvedMessage,
+    request: &ReplyMessageRequest,
+) -> Result<ReplyMessageResponse, AmxError> {
+    let parsed = require_parsed(resolved, "reply")?;
+    let mode = if request.reply_all {
+        ReplyMode::All
+    } else {
+        ReplyMode::Sender
+    };
+    let mut draft = derive_reply(
+        resolved.row.rowid,
+        parsed,
+        mode,
+        std::slice::from_ref(&request.from),
+    )?;
+    draft.from = Some(EmailAddress::new(request.from.clone()));
+    if request.text_body.is_some() {
+        draft.text_body = request.text_body.clone();
+    }
+    if request.html_body.is_some() {
+        draft.html_body = request.html_body.clone();
+    }
+
+    let to: Vec<String> = draft
+        .to
+        .iter()
+        .map(|address| address.email.clone())
+        .collect();
+    let composed = compose(&draft)?;
+    let submission = submit_and_file(account_resolver, &request.from, &to, &[], &[], &composed)?;
+
+    Ok(ReplyMessageResponse {
+        message_id: submission.message_id,
+        filed_to_sent: submission.filed_to_sent,
+        filing_error: submission.filing_error,
+    })
+}
+
+/// Derives a forward from the message `resolved` points at, fills in the caller-supplied
+/// recipients (`derive_forward` leaves them for the caller, since a forward has no original
+/// recipient to inherit), then submits it per [`submit_and_file`].
+pub fn run_forward_message(
+    account_resolver: &AccountResolver,
+    resolved: &ResolvedMessage,
+    request: &ForwardMessageRequest,
+) -> Result<ForwardMessageResponse, AmxError> {
+    let parsed = require_parsed(resolved, "forward")?;
+    let mut draft = derive_forward(resolved.row.rowid, parsed)?;
+    draft.from = Some(EmailAddress::new(request.from.clone()));
+    draft.to = request.to.iter().cloned().map(EmailAddress::new).collect();
+    draft.cc = request.cc.iter().cloned().map(EmailAddress::new).collect();
+    draft.bcc = request.bcc.iter().cloned().map(EmailAddress::new).collect();
+    if request.text_body.is_some() {
+        draft.text_body = request.text_body.clone();
+    }
+    if request.html_body.is_some() {
+        draft.html_body = request.html_body.clone();
+    }
+
+    let composed = compose(&draft)?;
+    let submission = submit_and_file(
+        account_resolver,
+        &request.from,
+        &request.to,
+        &request.cc,
+        &request.bcc,
+        &composed,
+    )?;
+
+    Ok(ForwardMessageResponse {
+        message_id: submission.message_id,
+        filed_to_sent: submission.filed_to_sent,
+        filing_error: submission.filing_error,
     })
 }
 
@@ -262,5 +390,73 @@ mod tests {
         let resolver = AccountResolver::open(file.path()).unwrap();
         let err = resolve_identifier(&resolver, "nobody@example.com").unwrap_err();
         assert!(matches!(err, AmxError::AccountFilterUnmatched { .. }));
+    }
+
+    fn resolved_with(
+        body: amx_core::BodyState,
+        parsed: Option<amx_parse::ParsedMessage>,
+    ) -> ResolvedMessage {
+        use amx_index::classify::Classified;
+        use amx_store::query::MessageRow;
+
+        ResolvedMessage {
+            row: MessageRow {
+                rowid: 7,
+                mailbox: 1,
+                date_sent: None,
+                date_received: None,
+                read: true,
+                flagged: false,
+                deleted: false,
+            },
+            mailbox_url: "imap://ACCOUNT/INBOX".to_string(),
+            account_id: "ACCOUNT".to_string(),
+            classified: Classified {
+                body,
+                attachments: amx_core::AttachmentState::None,
+                parsed,
+            },
+        }
+    }
+
+    #[test]
+    fn require_parsed_errors_loudly_when_the_source_body_was_never_indexed() {
+        let resolved = resolved_with(
+            amx_core::BodyState::Quarantined {
+                error: amx_core::ParseErrorKind::Io,
+            },
+            None,
+        );
+        let err = require_parsed(&resolved, "reply").unwrap_err();
+        assert!(matches!(
+            err,
+            AmxError::ReplyDerivationFailed { mode: "reply", .. }
+        ));
+    }
+
+    #[test]
+    fn require_parsed_returns_the_parsed_message_when_indexed() {
+        use amx_core::coverage::AttachmentState;
+        use amx_parse::ParsedMessage;
+
+        let parsed = ParsedMessage {
+            subject: Some("Hi".to_string()),
+            from: Vec::new(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            reply_to: Vec::new(),
+            date: None,
+            message_id: Some("<msg@example.com>".to_string()),
+            in_reply_to: None,
+            references: Vec::new(),
+            body_text: Some("hello".to_string()),
+            body_html: None,
+            footer: Default::default(),
+            attachments: AttachmentState::None,
+            attachment_parts: Vec::new(),
+        };
+        let resolved = resolved_with(amx_core::BodyState::Indexed, Some(parsed));
+        let out = require_parsed(&resolved, "reply").unwrap();
+        assert_eq!(out.subject.as_deref(), Some("Hi"));
     }
 }

@@ -304,6 +304,51 @@ pub struct CreateDraftResponse {
     pub message_id: String,
 }
 
+// ---- reply_message / forward_message (Phase 5 task 7) ----
+//
+// `text_body`/`html_body`, when supplied, override `derive_reply`/`derive_forward`'s default body
+// content (the original message's body for a reply; the quoted-history body for a forward) —
+// left `None`, that default stands. `compose` itself still rejects a draft with both bodies
+// absent, so a source message with no body and no caller-supplied replacement is a hard error,
+// never a silently empty send.
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ReplyMessageRequest {
+    pub rowid: i64,
+    pub from: String,
+    #[serde(default)]
+    pub reply_all: bool,
+    pub text_body: Option<String>,
+    pub html_body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReplyMessageResponse {
+    pub message_id: String,
+    pub filed_to_sent: bool,
+    pub filing_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ForwardMessageRequest {
+    pub rowid: i64,
+    pub from: String,
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    pub text_body: Option<String>,
+    pub html_body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ForwardMessageResponse {
+    pub message_id: String,
+    pub filed_to_sent: bool,
+    pub filing_error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +399,10 @@ mod tests {
         assert_schema!(SendMessageResponse);
         assert_schema!(CreateDraftRequest);
         assert_schema!(CreateDraftResponse);
+        assert_schema!(ReplyMessageRequest);
+        assert_schema!(ReplyMessageResponse);
+        assert_schema!(ForwardMessageRequest);
+        assert_schema!(ForwardMessageResponse);
         assert_schema!(StatusRequest);
         assert_schema!(StatusResponse);
     }

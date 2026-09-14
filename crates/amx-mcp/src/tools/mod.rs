@@ -17,5 +17,5 @@ pub use get_message::run_get_message;
 pub use pipeline::{ResolvedMessage, resolve_message};
 pub use search_messages::run_search;
 #[cfg(target_os = "macos")]
-pub use send::{run_create_draft, run_send_message};
+pub use send::{run_create_draft, run_forward_message, run_reply_message, run_send_message};
 pub use thread::{run_get_message_links, run_get_thread};

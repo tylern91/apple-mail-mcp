@@ -121,6 +121,16 @@ const SEND_CATALOG: &[ToolDescriptor] = &[
         lane: ToolLane::Send,
         read_only_hint: false,
     },
+    ToolDescriptor {
+        name: "reply_message",
+        lane: ToolLane::Send,
+        read_only_hint: false,
+    },
+    ToolDescriptor {
+        name: "forward_message",
+        lane: ToolLane::Send,
+        read_only_hint: false,
+    },
 ];
 
 /// The full tool catalog for this platform build.
@@ -484,6 +494,48 @@ impl AmxServer {
             .lock()
             .expect("account_resolver poisoned");
         let response = tools::run_create_draft(&resolver, &params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "reply_message",
+        description = "Reply to a message by rowid — derives recipients, subject, and threading headers from the source message, then submits over SMTP (filing to Sent unless the account is Gmail).",
+        annotations(read_only_hint = false, open_world_hint = true)
+    )]
+    pub async fn reply_message(
+        &self,
+        params: Parameters<ReplyMessageRequest>,
+    ) -> Result<Json<Envelope<ReplyMessageResponse>>, ErrorData> {
+        let resolved = self.resolve(params.0.rowid).map_err(to_error_data)?;
+        let resolver = self
+            .state
+            .account_resolver
+            .lock()
+            .expect("account_resolver poisoned");
+        let response =
+            tools::run_reply_message(&resolver, &resolved, &params.0).map_err(to_error_data)?;
+        Ok(Json(self.envelope(response)))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "forward_message",
+        description = "Forward a message by rowid to new recipients — quotes the source message's history as the body, with no inherited threading headers, then submits over SMTP (filing to Sent unless the account is Gmail).",
+        annotations(read_only_hint = false, open_world_hint = true)
+    )]
+    pub async fn forward_message(
+        &self,
+        params: Parameters<ForwardMessageRequest>,
+    ) -> Result<Json<Envelope<ForwardMessageResponse>>, ErrorData> {
+        let resolved = self.resolve(params.0.rowid).map_err(to_error_data)?;
+        let resolver = self
+            .state
+            .account_resolver
+            .lock()
+            .expect("account_resolver poisoned");
+        let response =
+            tools::run_forward_message(&resolver, &resolved, &params.0).map_err(to_error_data)?;
         Ok(Json(self.envelope(response)))
     }
 }
