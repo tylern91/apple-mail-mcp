@@ -11,6 +11,7 @@ use amx_core::config::Config;
 use amx_index::sync::{SyncEngine, SyncReport};
 use amx_mcp::server::{AmxServer, AppState};
 use amx_mcp::transport::{self, HttpServeConfig};
+use amx_send::{CredentialBroker, GoogleOAuthConfig, run_consent_flow};
 use amx_store::RoConnection;
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -44,6 +45,33 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Manage stored SMTP/IMAP secrets in our own Keychain namespace — never Mail.app's own.
+    Credentials {
+        #[command(subcommand)]
+        action: CredentialsAction,
+    },
+    /// Interactive OAuth2 consent flows for send-lane authentication.
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum CredentialsAction {
+    /// Prompt for (hidden input) and store an app-specific/account password for `email` — the
+    /// iCloud/Exchange/generic-IMAP arm of the send lane's credential broker (D1).
+    Set { email: String },
+    /// Report whether a password and/or an OAuth2 refresh token is stored for `email`, without
+    /// revealing either secret.
+    Status { email: String },
+}
+
+#[derive(Subcommand)]
+enum AuthAction {
+    /// Run the interactive Google OAuth2 (XOAUTH2) consent flow and store the refresh token —
+    /// requires AMX_GOOGLE_CLIENT_ID / AMX_GOOGLE_CLIENT_SECRET in the environment.
+    Google { email: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -63,6 +91,92 @@ fn main() -> ExitCode {
             bind,
             token,
         } => run_serve(transport, bind, token),
+        Command::Credentials { action } => run_credentials(action),
+        Command::Auth { action } => run_auth(action),
+    }
+}
+
+fn run_credentials(action: CredentialsAction) -> ExitCode {
+    match action {
+        CredentialsAction::Set { email } => {
+            let secret = match rpassword::prompt_password(format!("Password for {email}: ")) {
+                Ok(secret) => secret,
+                Err(err) => {
+                    eprintln!("amxcli: could not read password: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if secret.is_empty() {
+                eprintln!("amxcli: empty password, not storing");
+                return ExitCode::FAILURE;
+            }
+            match CredentialBroker::store_password(&email, &secret) {
+                Ok(()) => {
+                    println!("amxcli: stored a password for {email}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("amxcli: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        CredentialsAction::Status { email } => {
+            let password = CredentialBroker::has_password(&email);
+            let refresh_token = CredentialBroker::has_refresh_token(&email);
+            let mut failed = false;
+            for result in [&password, &refresh_token] {
+                if let Err(err) = result {
+                    eprintln!("amxcli: {err}");
+                    failed = true;
+                }
+            }
+            if failed {
+                return ExitCode::FAILURE;
+            }
+            println!(
+                "{email}: password={} oauth_refresh_token={}",
+                if password.unwrap_or(false) {
+                    "stored"
+                } else {
+                    "missing"
+                },
+                if refresh_token.unwrap_or(false) {
+                    "stored"
+                } else {
+                    "missing"
+                },
+            );
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+fn run_auth(action: AuthAction) -> ExitCode {
+    let AuthAction::Google { email } = action;
+    let config = match GoogleOAuthConfig::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("amxcli: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let refresh_token = match run_consent_flow(&config) {
+        Ok(token) => token,
+        Err(err) => {
+            eprintln!("amxcli: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match CredentialBroker::store_refresh_token(&email, &refresh_token) {
+        Ok(()) => {
+            println!("amxcli: stored a Google OAuth2 refresh token for {email}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("amxcli: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

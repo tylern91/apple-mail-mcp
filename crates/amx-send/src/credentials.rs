@@ -85,6 +85,26 @@ impl CredentialBroker {
             })
     }
 
+    /// Whether an app-specific/account password is stored for `email` — checks presence only,
+    /// never returns the secret itself.
+    pub fn has_password(email: &str) -> Result<bool, AmxError> {
+        match Self::password(email) {
+            Ok(_) => Ok(true),
+            Err(AmxError::CredentialUnavailable { .. }) => Ok(false),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Whether a Google OAuth2 refresh token is stored for `email` — checks presence only, never
+    /// returns the token itself, and never exchanges it (no network call).
+    pub fn has_refresh_token(email: &str) -> Result<bool, AmxError> {
+        match Self::refresh_token(email) {
+            Ok(_) => Ok(true),
+            Err(AmxError::CredentialUnavailable { .. }) => Ok(false),
+            Err(other) => Err(other),
+        }
+    }
+
     fn password(email: &str) -> Result<String, AmxError> {
         entry(email)?.get_password().map_err(|err| match err {
             keyring::Error::NoEntry => AmxError::CredentialUnavailable {

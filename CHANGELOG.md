@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-16
+
+### Added
+
+- `amxcli credentials set <email>` / `amxcli credentials status <email>`:
+  interactive (hidden-input) password storage and presence-only status
+  reporting against the `amx-send` `CredentialBroker` Keychain namespace —
+  never exposes a stored secret.
+- `amxcli auth google <email>`: drives the existing Google OAuth2 PKCE +
+  loopback-redirect consent flow and persists the resulting refresh token.
+- `CredentialBroker::has_password` / `has_refresh_token`: presence-only
+  checks backing the new `status` subcommand.
+
 ## [1.0.0] - 2026-09-14
 
 The wire contract (tool names, schemas, and lane assignments) freezes as of
