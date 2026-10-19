@@ -6,7 +6,6 @@
 //! serialize through a `Mutex` around each. `MailboxRegistry` is a plain in-memory snapshot and
 //! `IndexReaderPool`/tantivy's `Searcher` are already safe to share, so neither is locked.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -272,7 +271,8 @@ pub struct AmxServer {
 impl AmxServer {
     pub fn new(state: Arc<AppState>) -> Self {
         #[cfg(target_os = "macos")]
-        let tool_router = Self::tool_router() + Self::send_tool_router();
+        let tool_router =
+            Self::tool_router() + Self::mutate_tool_router() + Self::send_tool_router();
         #[cfg(not(target_os = "macos"))]
         let tool_router = Self::tool_router();
 
@@ -730,7 +730,42 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
+    #[tool(
+        name = "doctor",
+        description = "Full readiness screen: access, accounts, mailboxes, coverage, writer/quarantine state."
+    )]
+    pub async fn doctor(&self) -> Result<Json<DoctorResponse>, ErrorData> {
+        let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
+        let searcher = self.state.index_pool.searcher();
+        let response = tools::run_doctor(
+            &self.state.health,
+            &meta_conn,
+            &self.state.store_path,
+            &self.state.mailbox_registry,
+            &searcher,
+            &self.state.fields,
+        )
+        .map_err(to_error_data)?;
+        Ok(Json(response))
+    }
+
+    #[tool(name = "status", description = "Cheap access-only health check.")]
+    pub async fn status(&self) -> Result<Json<StatusResponse>, ErrorData> {
+        let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
+        let response = tools::run_status(&self.state.health, &meta_conn).map_err(to_error_data)?;
+        Ok(Json(response))
+    }
+}
+
+// `#[tool_router]` (rmcp-macros' `tool_router::tool_router`) collects every `#[tool]`-tagged fn by
+// scanning the impl block's raw tokens — it does not evaluate `#[cfg]` attributes on those fns, so
+// a per-method `#[cfg(target_os = "macos")]` inside the shared impl block above would still emit a
+// reference to the (cfg'd-away) method on non-macOS targets. Gating the entire impl block instead
+// keeps the macro from ever seeing these fns on a non-macOS build. The mutate and send lanes each
+// get their own gated block (and router) for this reason.
+#[cfg(target_os = "macos")]
+#[tool_router(router = mutate_tool_router)]
+impl AmxServer {
     #[tool(
         name = "set_read_state",
         description = "Mark a message read or unread in Mail.app, keeping the search index in sync.",
@@ -799,7 +834,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "set_flag",
         description = "Flag or unflag a message in Mail.app, keeping the search index in sync.",
@@ -868,7 +902,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "move_messages",
         description = "Move a message to another mailbox in Mail.app, keeping the search index in sync.",
@@ -951,7 +984,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "trash_messages",
         description = "Move a message to Mail.app's Trash mailbox, keeping the search index in sync. Never permanently erases.",
@@ -1021,7 +1053,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "triage_plan",
         description = "Freeze an ordered rowid list and an operation into a content-addressed plan for triage_apply. Touches nothing.",
@@ -1036,7 +1067,6 @@ impl AmxServer {
         Ok(Json(self.envelope(response)))
     }
 
-    #[cfg(target_os = "macos")]
     #[tool(
         name = "triage_apply",
         description = "Apply a frozen triage_plan by hash, optionally excluding items, through one writer acquisition and one commit for the whole batch.",
@@ -1047,7 +1077,7 @@ impl AmxServer {
         params: Parameters<TriageApplyRequest>,
     ) -> Result<Json<Envelope<TriageApplyResponse>>, ErrorData> {
         let plan_hash = params.0.plan_hash;
-        let exclude: HashSet<i64> = params.0.exclude.into_iter().collect();
+        let exclude: std::collections::HashSet<i64> = params.0.exclude.into_iter().collect();
 
         let (rowids, operation) = {
             let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
@@ -1078,39 +1108,8 @@ impl AmxServer {
             self.envelope(TriageApplyResponse { plan_hash, results }),
         ))
     }
-
-    #[tool(
-        name = "doctor",
-        description = "Full readiness screen: access, accounts, mailboxes, coverage, writer/quarantine state."
-    )]
-    pub async fn doctor(&self) -> Result<Json<DoctorResponse>, ErrorData> {
-        let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
-        let searcher = self.state.index_pool.searcher();
-        let response = tools::run_doctor(
-            &self.state.health,
-            &meta_conn,
-            &self.state.store_path,
-            &self.state.mailbox_registry,
-            &searcher,
-            &self.state.fields,
-        )
-        .map_err(to_error_data)?;
-        Ok(Json(response))
-    }
-
-    #[tool(name = "status", description = "Cheap access-only health check.")]
-    pub async fn status(&self) -> Result<Json<StatusResponse>, ErrorData> {
-        let meta_conn = self.state.meta_conn.lock().expect("meta_conn poisoned");
-        let response = tools::run_status(&self.state.health, &meta_conn).map_err(to_error_data)?;
-        Ok(Json(response))
-    }
 }
 
-// `#[tool_router]` (rmcp-macros' `tool_router::tool_router`) collects every `#[tool]`-tagged fn by
-// scanning the impl block's raw tokens — it does not evaluate `#[cfg]` attributes on those fns, so
-// a per-method `#[cfg(target_os = "macos")]` inside the shared impl block above would still emit a
-// reference to the (cfg'd-away) method on non-macOS targets. Gating the entire impl block instead
-// keeps the macro from ever seeing these fns on a non-macOS build.
 #[cfg(target_os = "macos")]
 #[tool_router(router = send_tool_router)]
 impl AmxServer {
@@ -1227,7 +1226,9 @@ mod tests {
     #[test]
     fn catalog_names_match_every_registered_tool() {
         #[cfg(target_os = "macos")]
-        let router = AmxServer::tool_router() + AmxServer::send_tool_router();
+        let router = AmxServer::tool_router()
+            + AmxServer::mutate_tool_router()
+            + AmxServer::send_tool_router();
         #[cfg(not(target_os = "macos"))]
         let router = AmxServer::tool_router();
         let registered: std::collections::HashSet<_> =
