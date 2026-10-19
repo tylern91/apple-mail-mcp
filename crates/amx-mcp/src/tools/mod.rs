@@ -3,11 +3,14 @@ pub mod browse;
 pub mod directory;
 pub mod doctor;
 pub mod get_message;
+#[cfg(target_os = "macos")]
+pub mod mutate;
 pub mod pipeline;
 pub mod search_messages;
 #[cfg(target_os = "macos")]
 pub mod send;
 pub mod thread;
+pub mod triage;
 
 pub use attachments::{run_extract_attachment_text, run_get_attachment, run_list_attachments};
 pub use browse::{run_count_messages, run_recent_messages};
@@ -19,3 +22,4 @@ pub use search_messages::run_search;
 #[cfg(target_os = "macos")]
 pub use send::{run_create_draft, run_forward_message, run_reply_message, run_send_message};
 pub use thread::{run_get_message_links, run_get_thread};
+pub use triage::{load_plan, run_triage_plan};

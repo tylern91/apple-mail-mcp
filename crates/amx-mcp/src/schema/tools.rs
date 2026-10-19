@@ -225,6 +225,120 @@ pub struct ListMailboxesResponse {
     pub mailboxes: Vec<MailboxSummary>,
 }
 
+// ---- set_read_state / set_flag (Phase 4 task 3) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetReadStateRequest {
+    pub rowid: i64,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetReadStateResponse {
+    pub rowid: i64,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetFlagRequest {
+    pub rowid: i64,
+    pub flagged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetFlagResponse {
+    pub rowid: i64,
+    pub flagged: bool,
+}
+
+// ---- move_messages / trash_messages (Phase 4 task 4) ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MoveMessagesRequest {
+    pub rowid: i64,
+    pub destination_mailbox: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MoveMessagesResponse {
+    pub rowid: i64,
+    /// The rowid the message now has — Apple Mail does not always preserve `ROWID` across a
+    /// move, so this may differ from the request's `rowid`. Callers must re-address the message
+    /// by this value, not the original.
+    pub new_rowid: i64,
+    pub mailbox: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrashMessagesRequest {
+    pub rowid: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrashMessagesResponse {
+    pub rowid: i64,
+    /// See [`MoveMessagesResponse::new_rowid`].
+    pub new_rowid: i64,
+    pub mailbox: String,
+}
+
+// ---- triage_plan (Phase 4 task 6) / triage_apply (Phase 4 task 7) ----
+
+/// The operation a triage plan will apply to every item once `triage_apply` runs it. Kept as a
+/// closed set (not a free-form JXA request) so a frozen plan's hash is meaningful — hashing an
+/// arbitrary operation payload would let two semantically-identical plans hash differently.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TriageOperation {
+    SetReadState { read: bool },
+    SetFlag { flagged: bool },
+    Move { destination_mailbox: String },
+    Trash,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriagePlanRequest {
+    /// The ordered rowids the plan covers. Order is part of the frozen, hashed content.
+    pub rowids: Vec<i64>,
+    pub operation: TriageOperation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriagePlanResponse {
+    /// SHA-256 (hex) over the plan's rowids and operation. Pass this to `triage_apply`.
+    pub plan_hash: String,
+    pub rowids: Vec<i64>,
+    pub operation: TriageOperation,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TriageApplyRequest {
+    pub plan_hash: String,
+    /// Rowids to drop from the frozen plan without applying the operation to them (parasxos #4).
+    #[serde(default)]
+    pub exclude: Vec<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TriageItemOutcome {
+    Success,
+    Skipped { reason: String },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriageItemResult {
+    pub rowid: i64,
+    pub outcome: TriageItemOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TriageApplyResponse {
+    pub plan_hash: String,
+    pub results: Vec<TriageItemResult>,
+}
+
 // ---- doctor / status (tasks 7-8) ----
 //
 // These two diagnostics already report health/coverage as their own subject matter, so unlike
@@ -393,6 +507,18 @@ mod tests {
         assert_schema!(ListAccountsResponse);
         assert_schema!(ListMailboxesRequest);
         assert_schema!(ListMailboxesResponse);
+        assert_schema!(SetReadStateRequest);
+        assert_schema!(SetReadStateResponse);
+        assert_schema!(SetFlagRequest);
+        assert_schema!(SetFlagResponse);
+        assert_schema!(MoveMessagesRequest);
+        assert_schema!(MoveMessagesResponse);
+        assert_schema!(TrashMessagesRequest);
+        assert_schema!(TrashMessagesResponse);
+        assert_schema!(TriagePlanRequest);
+        assert_schema!(TriagePlanResponse);
+        assert_schema!(TriageApplyRequest);
+        assert_schema!(TriageApplyResponse);
         assert_schema!(DoctorRequest);
         assert_schema!(DoctorResponse);
         assert_schema!(SendMessageRequest);

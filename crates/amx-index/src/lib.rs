@@ -1,7 +1,9 @@
 pub mod classify;
 pub mod coverage;
+pub mod document;
 pub mod fetch;
 pub mod meta;
+pub mod mutate;
 pub mod planner;
 pub mod quarantine;
 pub mod reader;

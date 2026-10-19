@@ -16,6 +16,7 @@ name = "amxcli"
 path = "src/main.rs"
 
 [dependencies]
+amx-automation = { path = "../amx-automation" }
 amx-core = { path = "../amx-core" }
 amx-index = { path = "../amx-index" }
 amx-mcp = { path = "../amx-mcp" }

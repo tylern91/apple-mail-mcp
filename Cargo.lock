@@ -53,16 +53,21 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "amx-automation"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "amx-core",
  "amx-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "amx-cli"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
+ "amx-automation",
  "amx-core",
  "amx-index",
  "amx-mcp",
@@ -78,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "amx-compose"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "amx-core",
  "amx-parse",
@@ -89,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "amx-core"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "percent-encoding",
  "rusqlite",
@@ -102,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "amx-index"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "amx-core",
  "amx-parse",
@@ -117,8 +122,9 @@ dependencies = [
 
 [[package]]
 name = "amx-mcp"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
+ "amx-automation",
  "amx-compose",
  "amx-core",
  "amx-index",
@@ -132,6 +138,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tantivy",
  "tempfile",
  "thiserror",
@@ -142,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "amx-parse"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "amx-core",
  "html5ever",
@@ -157,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "amx-send"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "amx-compose",
  "amx-core",
@@ -175,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "amx-store"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "amx-core",
  "notify",
