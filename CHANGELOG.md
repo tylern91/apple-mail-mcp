@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-19
+
+### Security
+
+- Bump `zip` 2.4.2 → 9.0.5 in `amx-parse`, clearing RUSTSEC-2026-0367,
+  RUSTSEC-2026-0368 and RUSTSEC-2026-0369 (symlink/SUID handling in
+  `ZipArchive::extract`). This workspace only reads archives via
+  `ZipArchive::new`/`by_index` and never calls `extract()`, so it was not
+  exploitable here, but the weekly audit blocked on it.
+
+### Fixed
+
+- The weekly `Security Scan` run failed on every `schedule` event (even with
+  zero vulnerabilities) because `rustsec/audit-check` opens issues on scheduled
+  runs and the job lacked `issues: write`.
+- `office_xml_to_text` adapts to zip 9's fallible `ZipFile::name()`, skipping an
+  entry whose name the library rejects instead of failing the whole document.
+
 ## [1.1.0] - 2026-09-16
 
 ### Added
