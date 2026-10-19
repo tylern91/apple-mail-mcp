@@ -20,6 +20,9 @@ jobs:
     permissions:
       contents: read
       checks: write
+      # On `schedule` events audit-check opens one deduplicated issue per advisory;
+      # without this it fails with "Resource not accessible by integration".
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
