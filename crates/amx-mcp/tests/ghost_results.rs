@@ -5,6 +5,10 @@
 //! no extra reader-reload wait beyond the one `reload()` call the real handler itself makes) and
 //! asserts the stale mailbox is gone. The test fails if `finish_move`'s `commit()` is ever moved
 //! to run after the tool returns, or dropped altogether.
+//!
+//! The whole mutate lane (`tools::mutate`) is macOS-only, so this test is too.
+
+#![cfg(target_os = "macos")]
 
 use std::fs;
 use std::path::Path;
