@@ -91,7 +91,9 @@ pub fn office_xml_to_text(bytes: &[u8]) -> Result<String, ExtractError> {
         let mut entry = archive
             .by_index(i)
             .map_err(|err| ExtractError::Zip(err.to_string()))?;
-        if !entry.name().ends_with(".xml") {
+        // zip 9's `name()` is fallible (it rejects unsafe/invalid entry names); such an entry is
+        // not a legitimate OOXML part, so skip it rather than failing the whole document.
+        if !matches!(entry.name(), Ok(name) if name.ends_with(".xml")) {
             continue;
         }
         let mut contents = String::new();

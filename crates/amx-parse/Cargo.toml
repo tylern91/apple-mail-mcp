@@ -19,5 +19,5 @@ serde = { version = "1", features = ["derive"] }
 html5ever = "0.39"
 markup5ever_rcdom = "0.39"
 lopdf = "0.42"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-09-14
+## [1.2.0] - 2026-10-20
 
 ### Added
 
@@ -40,6 +40,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected `completeness.rs`'s doc-comment example (ROWID 42191): the cited
   `X-Apple-Content-Length` string lives inside a nested MIME part's headers, not the
   message's top-level header block the oracle actually reads.
+
+### Known gaps
+
+- Back-to-back `move_messages` calls with no settle gap can make
+  `wait_for_relocated_rowid`'s rowid disambiguation observe another call's new rowid,
+  producing a spurious `MutationVerificationFailed` that leaves the Tantivy index stale for
+  that rowid until a manual `amxcli sync`. A self-healing reindex on verification failure is
+  the planned follow-up.
+- Every mutate tool addresses the account in JXA by `AccountResolver::display_name`, which
+  falls back to the account UUID when `Accounts4.sqlite` has no description/username. Only
+  the local "On My Mac" account was exercised live, so mutate tools may fail to locate
+  real IMAP/Exchange accounts until account addressing gets its own design decision.
+
+## [1.1.1] - 2026-10-19
+
+### Security
+
+- Bump `zip` 2.4.2 → 9.0.5 in `amx-parse`, clearing RUSTSEC-2026-0367,
+  RUSTSEC-2026-0368 and RUSTSEC-2026-0369 (symlink/SUID handling in
+  `ZipArchive::extract`). This workspace only reads archives via
+  `ZipArchive::new`/`by_index` and never calls `extract()`, so it was not
+  exploitable here, but the weekly audit blocked on it.
+
+### Fixed
+
+- The weekly `Security Scan` run failed on every `schedule` event (even with
+  zero vulnerabilities) because `rustsec/audit-check` opens issues on scheduled
+  runs and the job lacked `issues: write`.
+- `office_xml_to_text` adapts to zip 9's fallible `ZipFile::name()`, skipping an
+  entry whose name the library rejects instead of failing the whole document.
+
+## [1.1.0] - 2026-09-16
+
+### Added
+
+- `amxcli credentials set <email>` / `amxcli credentials status <email>`:
+  interactive (hidden-input) password storage and presence-only status
+  reporting against the `amx-send` `CredentialBroker` Keychain namespace —
+  never exposes a stored secret.
+- `amxcli auth google <email>`: drives the existing Google OAuth2 PKCE +
+  loopback-redirect consent flow and persists the resulting refresh token.
+- `CredentialBroker::has_password` / `has_refresh_token`: presence-only
+  checks backing the new `status` subcommand.
 
 ## [1.0.0] - 2026-09-14
 
